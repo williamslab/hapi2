@@ -6,7 +6,7 @@
 #include <string.h>
 #include <zlib.h>
 #include <genetio/marker.h>
-#include <genetio/personnorm.h>
+#include <genetio/personbulk.h>
 #include <genetio/personio.h>
 #include <genetio/util.h>
 #include "cmdlineopts.h"
@@ -88,14 +88,14 @@ int main(int argc, char **argv) {
 
   //////////////////////////////////////////////////////////////////////////
   // Read the genotype data
-  PersonIO<PersonNorm>::readData(CmdLineOpts::genoFile,
+  PersonIO<PersonBulk>::readData(CmdLineOpts::genoFile,
 				 CmdLineOpts::markerFile,
 				 CmdLineOpts::indFile, CmdLineOpts::onlyChr,
 				 CmdLineOpts::startPos, CmdLineOpts::endPos,
 				 CmdLineOpts::XchrName,
-				 CmdLineOpts::noFamilyId,
-				 CmdLineOpts::vcfInput, log,
-				 /*allowEmptyParents=*/ true);
+				 CmdLineOpts::noFamilyId, log,
+				 /*allowEmptyParents=*/ true,
+				 /*bulkData=*/ true);
 
   // open the .phgeno file for writing before phasing, even though we won't
   // write it until phasing completes.  This ensures we have write
@@ -120,12 +120,12 @@ int main(int argc, char **argv) {
   }
 
   printf("\nPhasing families with two or more children out of %lu families... ",
-	 PersonNorm::numFamilies());
+	 PersonBulk::numFamilies());
 
   // Phase!
-  PersonNorm::fam_ht_iter iter = PersonNorm::familyIter();
-  for( ; iter != PersonNorm::familyIterEnd(); iter++) {
-    dynarray<PersonNorm*> *children = iter->second;
+  PersonBulk::fam_ht_iter iter = PersonBulk::familyIter();
+  for( ; iter != PersonBulk::familyIterEnd(); iter++) {
+    dynarray<PersonBulk*> *children = iter->second;
     if (children->length() > 1) {
       // phase the current family:
       // require at least two children as trios are better to phase in a
@@ -138,14 +138,14 @@ int main(int argc, char **argv) {
   // Finished phasing all families!
   printf("done.\n");
 
-  for(int o = 0; o < 2; o++) {
-    FILE *out = outs[o];
-    fprintf(out, "\nPrinting... ");
-  }
+  // TODO: after phasing results are stored, remove this exit call
+  exit(0);
+
+  mult_printf(outs, "\nPrinting... ");
   fflush(stdout);
 
   if (CmdLineOpts::useImpute2Format) {
-    PersonIO<PersonNorm>::printGzImpute2Haps(gzout);
+    PersonIO<PersonBulk>::printGzImpute2Haps(gzout);
     gzclose(gzout);
 
     // Print sample file:
@@ -156,13 +156,13 @@ int main(int argc, char **argv) {
       perror("open");
     }
     else {
-      PersonIO<PersonNorm>::printImpute2SampleFile(out);
+      PersonIO<PersonBulk>::printImpute2SampleFile(out);
       fclose(out);
     }
   }
   else {
     // Print final haplotypes to phgeno file (opened above):
-    PersonIO<PersonNorm>::printGzEigenstratPhased(gzout);
+    PersonIO<PersonBulk>::printGzEigenstratPhased(gzout);
     gzclose(gzout);
 
     // Print phind file:
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
       perror("open");
     }
     else {
-      PersonIO<PersonNorm>::printPhasedIndFile(out);
+      PersonIO<PersonBulk>::printPhasedIndFile(out);
       fclose(out);
     }
     // Print phsnp file:

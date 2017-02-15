@@ -38,15 +38,15 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"geno", required_argument, NULL, 'g'},
     {"snp",  required_argument, NULL, 's'},
     {"ind",  required_argument, NULL, 'i'},
-    {"base", required_argument, NULL, 'b'},
+//    {"base", required_argument, NULL, 'b'},
     {"plink", required_argument, NULL, 'p'},
-    {"vcf", required_argument, NULL, 'v'},
+//    {"vcf", required_argument, NULL, 'v'},
     {"out",  required_argument, NULL, 'o'},
     {"chr", required_argument, NULL, 'c'},
     {"start", required_argument, NULL, START_POS},
     {"end", required_argument, NULL, END_POS},
     {"impute2", no_argument, &CmdLineOpts::useImpute2Format, 1},
-    {"vcf_out", no_argument, &CmdLineOpts::vcfOutput, 1},
+//    {"vcf_out", no_argument, &CmdLineOpts::vcfOutput, 1},
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
     {"force", no_argument, &CmdLineOpts::forceWrite, 1},
     {0, 0, 0, 0}
@@ -61,7 +61,13 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 
   int prefixLength = 0;
 
-  char optstring[80] = "g:i:s:b:p:v:o:c:";
+  // Note: not currently supporting the -b and -v options corresponding to
+  //    Eigenstrat/packed Ancestry Map format input and VCF input
+  // Code to process these options still exists here, however (see cases below),
+  // but the optstring being set without these options will prevent the code
+  // from being run
+//  char optstring[80] = "g:i:s:b:p:v:o:c:";
+  char optstring[80] = "g:i:s:p:o:c:";
   while ((c = getopt_long(argc, argv, optstring, longopts, &optionIndex))
 									!= -1) {
     errno = 0;    // initially: may get errors from strtol
@@ -167,11 +173,11 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
       case '?':
 	// bad option; getopt_long already printed error message
         printUsage(stderr, argv[0]);
-	abort();
+	exit(1);
 	break;
 
       default:
-	abort();
+	exit(1);
     }
   }
 
@@ -244,16 +250,21 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "REQUIRED ARGUMENTS:\n");
   fprintf(out, "  -o, --out <prefix>\toutput file prefix (suffix .phgeno,.phsnp,.phind,.log)\n");
   fprintf(out, " AND EITHER:\n");
-  fprintf(out, "  -g, --geno <filename>\tgenotype file in Eigenstrat or Ancestrymap format or\n");
-  fprintf(out, "\t\t\tPLINK BED file\n");
-  fprintf(out, "  -s, --snp <filename>\tSNP file or PLINK BIM file\n");
-  fprintf(out, "  -i, --ind <filename>\tindividual file or PLINK FAM file\n");
-  fprintf(out, " OR:\n");
-  fprintf(out, "  -b, --base <prefix>\tloads <prefix>.geno, <prefix>.snp, <prefix>.ind\n");
+  fprintf(out, "  -g, --geno <filename>\tgenotype file in PLINK BED format\n");
+  fprintf(out, "  -s, --snp <filename>\tPLINK BIM file\n");
+  fprintf(out, "  -i, --ind <filename>\tPLINK FAM file\n");
+  // Note: not currently supporting EIGENSTRAT or packed ancestry map format:
+//  fprintf(out, "  -g, --geno <filename>\tgenotype file in Eigenstrat or Ancestrymap format or\n");
+//  fprintf(out, "\t\t\tPLINK BED file\n");
+//  fprintf(out, "  -s, --snp <filename>\tSNP file or PLINK BIM file\n");
+//  fprintf(out, "  -i, --ind <filename>\tindividual file or PLINK FAM file\n");
+//  fprintf(out, " OR:\n");
+//  fprintf(out, "  -b, --base <prefix>\tloads <prefix>.geno, <prefix>.snp, <prefix>.ind\n");
   fprintf(out, " OR:\n");
   fprintf(out, "  -p, --plink <prefix>\tloads <prefix>.bed, <prefix>.bim, <prefix>.fam\n");
-  fprintf(out, " OR:\n");
-  fprintf(out, "  -v, --vcf <filename>\tbgzipped and indexed VCF file; - for stdin\n");
+  // Note: not currently supporting VCF format:
+//  fprintf(out, " OR:\n");
+//  fprintf(out, "  -v, --vcf <filename>\tbgzipped and indexed VCF file; - for stdin\n");
   fprintf(out, "\n");
   fprintf(out, "OPTIONS:\n");
   fprintf(out, "  -c, --chr <#>\t\tonly analyze specified chromosome number\n");
@@ -262,9 +273,9 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "  --end <#>\t\tend position on given chromosome\n");
   fprintf(out, "\n");
   fprintf(out, "  --impute2\t\tprint phase results in IMPUTE2 format\n");
-  fprintf(out, "  --vcf_out\t\toutput phase in bgzip VCF format (default for -v input)\n");
+  // Note: not currently supporting VCF output
+//  fprintf(out, "  --vcf_out\t\toutput phase in bgzip VCF format (default for -v input)\n");
   fprintf(out, "  --force\t\tforce writing to output files (overwrite if they exist)\n");
-//  fprintf(out, "  --analyze-X\t\tcheck for IBD on X chromosome\n");
   fprintf(out, "\n");
   fprintf(out, "  --no_family_id\tignore family ids from PLINK .fam file --\n");
   fprintf(out, "\t\t\tdefault PLINK ids are of the form \"family_id:person_id\"\n");
