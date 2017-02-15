@@ -1,0 +1,5 @@
+.deps
+*.o
+.*.swp
+hapi2
+tags
