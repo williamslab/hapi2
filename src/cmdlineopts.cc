@@ -15,13 +15,13 @@
 char *CmdLineOpts::genoFile = NULL;
 char *CmdLineOpts::indFile = NULL;
 char *CmdLineOpts::markerFile = NULL;
-int   CmdLineOpts::vcfInput = 0; // TODO
+int   CmdLineOpts::vcfInput = 0;
 char *CmdLineOpts::outFile = NULL;
 int   CmdLineOpts::useImpute2Format = 0;
-int   CmdLineOpts::vcfOutput = 0; // TODO
+int   CmdLineOpts::vcfOutput = 0;
 int   CmdLineOpts::noFamilyId = 0;
-char *CmdLineOpts::XchrName = NULL; // TODO
-char *CmdLineOpts::onlyChr = NULL; // TODO
+char *CmdLineOpts::XchrName = NULL;
+char *CmdLineOpts::onlyChr = NULL;
 int   CmdLineOpts::startPos = 0;
 int   CmdLineOpts::endPos = INT_MAX;
 int   CmdLineOpts::forceWrite = 0;
