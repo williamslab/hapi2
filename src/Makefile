@@ -1,4 +1,4 @@
-CPPSRCS= main.cc cmdlineopts.cc
+CPPSRCS= main.cc cmdlineopts.cc phaser.cc
 CSRCS= 
 OBJS= $(patsubst %.cc,%.o,$(CPPSRCS)) $(patsubst %.c,%.o,$(CSRCS))
 EXEC= hapi2

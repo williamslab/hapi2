@@ -10,6 +10,7 @@
 #include <genetio/personio.h>
 #include <genetio/util.h>
 #include "cmdlineopts.h"
+#include "phaser.h"
 
 void checkIfFileExists(char *filename, bool printWarning);
 void printPhaseType(FILE *out);
@@ -123,15 +124,18 @@ int main(int argc, char **argv) {
 	 PersonBulk::numFamilies());
 
   // Phase!
+  int numChrs = Marker::getNumChroms();
+
   PersonBulk::fam_ht_iter iter = PersonBulk::familyIter();
   for( ; iter != PersonBulk::familyIterEnd(); iter++) {
     dynarray<PersonBulk*> *children = iter->second;
     if (children->length() > 1) {
-      // phase the current family:
+      // phase the current family on each chromosome successively:
       // require at least two children as trios are better to phase in a
       // population context
-      // TODO:
-//      Phaser::run(iter->first, children);
+      for(int chrIdx = 0; chrIdx < numChrs; chrIdx++) {
+	Phaser::run(iter->first, *children, chrIdx);
+      }
     }
   }
 
