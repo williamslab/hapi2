@@ -122,6 +122,7 @@ int main(int argc, char **argv) {
 
   printf("\nPhasing families with two or more children out of %lu families... ",
 	 PersonBulk::numFamilies());
+  fflush(stdout);
 
   // Phase!
   int numChrs = Marker::getNumChroms();
