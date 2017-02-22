@@ -76,6 +76,8 @@ class Phaser {
     static void makePartialPIStates(dynarray<State> &partialStates,
 				    uint8_t parentData,
 				    uint64_t childrenData[5]);
+    static void makeFullStates(dynarray<State> &partialStates, int marker,
+			       uint64_t childrenMiss);
 
 
     //////////////////////////////////////////////////////////////////
@@ -99,6 +101,16 @@ struct State {
   // the transmitted haplotype from parent 1.
   uint64_t iv;         // inheritance vector
 
+  // Ambiguous bits: at partly informative markers, when a child is heterozygous
+  // and recombines relative to the previous marker, which parent transmitted
+  // a recombination -- and therefore what the iv value is -- is ambiguous.
+  // This ambiguity needs to be tracked so that it can (a) be resolved using
+  // information at later markers and (b) won't be treated as fixed with
+  // respect to calculating numbers of recombinations at later markers.
+  //
+  // Only valid if <markerType> == MT_PI
+  uint64_t ambig;      // ambiguous inheritance vector bits
+
   // When a parent is homozygous, the corresponding inheritance vector bits
   // are unknown. At the beginning of the chromosome, some bits in <iv> are
   // invalid because there has not yet been a marker that is heterozygous for
@@ -111,7 +123,19 @@ struct State {
   uint64_t unassigned; // iv bits that haven't been assigned up to this marker
 
   // index of previous state that leads to optimal phase here
+  // TODO: add checks to ensure the number of states does not grow beyond
+  // the capacity here. Could enlarge if needed.
   uint16_t prevState;
+
+  // Minimum number of recombinations to reach this state
+  uint16_t minRecomb;
+
+  // type of the state: fully informative or partly informative
+  uint8_t  markerType : 2; // 2 bits: we may later add FI for both parents
+
+  // phase of the parents: 2 lowest order bits are for parent 0, next two bits
+  // are for parent 1.
+  uint8_t  parentPhase : 4;
 };
 
 #endif // PHASER_H

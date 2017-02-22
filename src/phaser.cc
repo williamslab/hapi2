@@ -72,6 +72,16 @@ void Phaser::run(PersonBulk::par_pair parents, dynarray<PersonBulk*> &children,
     // defined for the informative parent(s)
     makePartialStates(partialStates, mt, parentData, childrenData);
 
+    ///////////////////////////////////////////////////////////////////////////
+    // Step 3: Using states for the previous informative marker, fill in
+    // unknown inheritance vector bits by propagation and generate full states.
+    // Simultaneously calculate the minimum recombination counts for each state
+    // and identify which previous state(s) produce that minimum count
+    makeFullStates(partialStates, /*marker=*/ m,
+		   /*childrenMiss=*/ childrenData[G_MISS]);
+
+
+    // Clean up for next iteration
     partialStates.clear();
   }
 }
@@ -131,26 +141,6 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
   // stores the genotype of the non-missing parent if present; if both are
   // missing, stores 1, the value for missing data
   int missingType = -1;
-
-  // TODO: remove
-  assert( 1 == (1 << G_HOM0));
-  assert(12 == ((1 << G_HOM1) | (1 << G_HET)));
-  assert(14 == ((1 << G_HOM1) | (1 << G_HET) | (1 << G_MISS)));
-  assert( 5 == ((1 << G_HOM0) | (1 << G_HET)));
-  assert( 7 == ((1 << G_HOM0) | (1 << G_HET) | (1 << G_MISS)));
-  assert( 9 == ((1 << G_HOM0) | (1 << G_HOM1)));
-  assert( 8 == (1 << G_HOM1));
-  assert( 4 == (1 << G_HET));
-  assert( 2 == (1 << G_MISS));
-  assert( 3 == ((1 << G_HOM0) | (1 << G_MISS)));
-  assert(10 == ((1 << G_HOM1) | (1 << G_MISS)));
-  assert( 6 == ((1 << G_HET) | (1 << G_MISS)));
-  assert(11 == ((1 << G_HOM0) | (1 << G_HOM1) | (1 << G_MISS)));
-  assert(13 == ((1 << G_HOM0) | (1 << G_HOM1) | (1 << G_HET)));
-  assert(1 == G_MISS);
-  assert(2 == G_HET);
-  assert(0 == G_HOM0);
-  assert(3 == G_HOM1);
 
   switch (parentGenoTypes) {
     //////////////////////////////////////////////////////////////////////////
@@ -464,6 +454,12 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     // No information about transmission from homozygous parent and for
     // children that are missing data:
     newState.unassigned = _parBits[homPar] | childrenData[ G_MISS ];
+    newState.markerType = MT_FI_1;
+    // 2 decimal = 10 binary. This is the currently assigned phase for the
+    // heterozygous parent. That value (with 0 [no information] for the other
+    // parent needs to be either the two lowest order bits when <hetPar> == 0
+    // or the two higher order bits when <hetPar> == 1.
+    newState.parentPhase = 2 << (2*hetPar);
   }
 }
 
@@ -482,13 +478,92 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
   // Initially assumes the phase is assigned such that allele 0 is on
   // haplotype 0 and allele 1 is on haplotype 1. In particular, the genotypes
   // of the children (excluding the missing data children) already encode the
-  // inheritance vector assuming this phase assignment in the parents
-  // TODO: want to store a value that is the inverse of missing data?
+  // inheritance vector assuming this phase assignment in the parents.
+  // This also assumes that all heterozygous children received haplotype 0
+  // from parent 0 and haplotype 1 from parent 1, but this will be changed
+  // when making full states.
   newState.iv = childrenData[ 4 ] & ( ~childrenData[ G_MISS ] );
+  // Potentially ambiguous bits are those where the child is heterozygous:
+  newstate.ambig = childrenData[ G_HET ];
   // Have full transmission information except for children with missing data:
   newState.unassigned = childrenData[ G_MISS ];
+  newState.markerType = MT_PI;
+  // 10 decimal = 1010 binary, the currently assigned phase (see above)
+  newState.parentPhase = 10;
 }
 
+// Using the states at the previous marker where present and <partialStates>,
+// generates all full states. Stores these as the last value in <_hmm> and
+// stores the marker index <marker> that these states apply to in <_hmmMarker>.
+void Phaser::makeFullStates(dynarray<State> &partialStates, int marker,
+			    uint64_t childrenMiss) {
+  // The new entry in <_hmm> corresponds to <marker>:
+  _hmmMarker.append(marker);
+
+  if (_hmm.length() == 0) {
+    // Partial states are equivalent to full states when there are no previous
+    // states
+    _hmm.append(partialStates);
+    return;
+  }
+
+  int newIndex = _hmm.length();
+  _hmm.addEmpty();
+  dynarray<State> &newStates  = _hmm[newIndex];
+  dynarray<State> &prevStates = _hmm[newIndex-1];
+
+  int numPrev = prevStates.length();
+  for(int i = 0; i < numPrev; i++) {
+    // TODO
+    // (1) For each (current) partial state, determine the full state that
+    // prevStates[i] maps to. This is determined based on:
+    //     (a) partialStates[j].uassigned -- when a parent is uninformative
+    //         or a child is missing data, we propagate either one or two
+    //         bits, respectively, from the previous state.
+    //     (b) the phase of the parents in the partial states is arbitrary, so
+    //         can/will flip the phase of heterozygous parents in order to
+    //         produce minimum recombinations.
+
+    // TODO
+    // (2) if partialStates[j].markerType == MT_PI, for heterozygous children:
+    //     (a) When two recombinations occur relative to the previous marker,
+    //         flip both corresponding bits in the inheritance vector. HAPI
+    //         avoids a state space explosion for heterozygous children at
+    //         MT_PI markers by a combinaton of only modeling states with 0
+    //         recombinations instead of 2 when possible and (b),(c) below.
+    //     (b) When one recombination occus relative to the previous marker,
+    //         leave the iv value as arbitrary and set the child as ambiguous.
+    //     Note: ambiguous bits are only set for:
+    //      (i)  children that are newly ambiguous: i.e, those that are
+    //           heterozygous and exhibit one recombination relative to the
+    //           previous marker
+    //      (ii) or children that are heterozygous and were ambiguous at the
+    //           previous marker (this status propagates forward until an
+    //           unambiguous marker, including the child being homozygous at
+    //           MT_PI)
+    //           Note: both (i) and (ii) can apply and the child is still
+    //                 ambiguous, but a child that is heterozygous and exhibits
+    //                 0 or 2 (see (a) above) recombinations relative to
+    //                 previous unambiguous inheritance vector value will be
+    //                 unambiguous.
+
+    // TODO
+    // (3) Look up the full state(s) corresponding to the <iv> and <ambig>
+    // values deduced above. When a child is missing data, must do this for
+    // multiple values (TODO: say more). (TODO: what about <unassigned> or
+    // <markerType>?)
+
+    // TODO
+    // (4) For each full state, if this previous state has fewer recombinations
+    // than the current previous state, update the <prevState>, <minRecomb>, and
+    // <parentPhase> fields.
+    // TODO: how should we deal with the fact that multiple previous states
+    // can produce the same number of recombinations? (Ambiguous previous
+    // states?)
+
+    // TODO: also need to update <unassigned>
+  }
+}
 
 void printGeno(FILE *out, int marker, uint8_t bitGeno) {
   const char *alleles = Marker::getMarker(marker)->getAlleleStr();
