@@ -3,6 +3,8 @@
 // This program is distributed under the terms of the GNU General Public License
 
 #include <genetio/personbulk.h>
+#include <sparsehash/dense_hash_map>
+#include <bitset>
 
 #ifndef PHASER_H
 #define PHASER_H
@@ -69,29 +71,78 @@ class Phaser {
     static int  getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes);
     static void makePartialStates(dynarray<State> &partialStates,
 				  int markerTypes, uint8_t parentData,
-				  uint64_t childrenData[5]);
+				  const uint64_t childrenData[5]);
     static void makePartialFI1States(dynarray<State> &partialStates,
 				     uint8_t parentData,
-				     uint64_t childrenData[5]);
+				     const uint64_t childrenData[5]);
     static void makePartialPIStates(dynarray<State> &partialStates,
 				    uint8_t parentData,
-				    uint64_t childrenData[5]);
-    static void makeFullStates(dynarray<State> &partialStates, int marker,
-			       uint64_t childrenMiss);
+				    const uint64_t childrenData[5]);
+    static void makeFullStates(const dynarray<State> &partialStates, int marker,
+			       const uint64_t childrenData[5]);
+    static void calcHetChildPIVals(const uint64_t recombsPrevUnambig,
+				   const uint64_t childrenData[5],
+				   uint64_t &hetChildBitFlip,
+				   uint64_t &newAmbigChildren);
+    static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
+			     uint64_t fullUnassigned, uint64_t recombs,
+			     uint8_t hetParent, uint8_t initParPhase,
+			     uint8_t parPhaseFlip, uint16_t prevIndex,
+			     uint16_t prevMinRecomb,
+			     const uint64_t childrenData[5]);
+    static State * lookupState(const uint64_t iv, const uint64_t ambig);
+    static size_t popcount(uint64_t val) {
+      // Currently using std::bitset, but the conversion is probably not free,
+      // so optimize? TODO
+      std::bitset<64> to_count(val);
+      return to_count.count();
+    }
 
 
     //////////////////////////////////////////////////////////////////
     // private static variables
     //////////////////////////////////////////////////////////////////
 
-    static dynarray< dynarray<State> > _hmm;
+    static dynarray< dynarray<State*> > _hmm;
     static dynarray<int> _hmmMarker;
 
-    // All inheritance vector bits set to 1 (variable value depending on the
-    // number of children in the family)
-    static uint64_t _allBitsSet;
-    // Inheritance vector bits corresponding to parent 0 and 1 (indexed)
-    static uint64_t _parBits[2];
+    // Hash table (including all the book keeping stuff) to store states
+    // to enable fast lookup of states a given previous state maps to
+    typedef typename std::pair<uint64_t,uint64_t>* iv_ambig;
+    typedef typename std::pair<uint64_t,uint64_t> iv_ambig_real;
+    struct hashIVAmbig {
+      size_t operator()(iv_ambig const key) const {
+	// make a better hash function?
+	return std::tr1::hash<uint64_t>{}(key->first) +
+	       std::tr1::hash<uint64_t>{}(key->second);
+      }
+    };
+    struct eqIVAmbig {
+      bool operator()(const iv_ambig k1, const iv_ambig k2) const {
+	return k1->first == k2->first && k1->second == k2->second;
+      }
+    };
+    typedef typename google::dense_hash_map<iv_ambig, State *, hashIVAmbig,
+					    eqIVAmbig> state_ht;
+    typedef typename state_ht::const_iterator state_ht_iter;
+    static state_ht _stateHash;
+
+    // Inheritance vector bits corresponding to parent 0 and 1 (indexed).
+    // Index 2 corresponds to all inheritance vector bits set to 1.
+    // Note these values are variable for each family depending on the number of
+    // children in it.
+    static uint64_t _parBits[3];
+    // When changing the phase one or both parents, the inheritance vector
+    // values corresponding to that parent are flipped. For the four different
+    // possibilities, corresponding to the bits to be flipped for one child,
+    // the following will contain the flip value that applies to all children
+    // in the current family. (That is, the index value but repeated every 2
+    // bits up to the 2*<numChildren>-th bit).
+    static uint64_t _flips[4];
+    // As above, but applies to ambiguous inheritance vector values. See the
+    // comment in lookupState() which talks about the fact that there are
+    // two distinct values only instead of four.
+    static uint64_t _ambigFlips[4];
 };
 
 struct State {
@@ -107,9 +158,11 @@ struct State {
   // This ambiguity needs to be tracked so that it can (a) be resolved using
   // information at later markers and (b) won't be treated as fixed with
   // respect to calculating numbers of recombinations at later markers.
-  //
-  // Only valid if <markerType> == MT_PI
   uint64_t ambig;      // ambiguous inheritance vector bits
+
+  // TODO: comment on dual use of <unassigned>? In partial states it is a
+  // mask for propagating from the previous marker. In full states it indicates
+  // which bits shouldn't count for recombination
 
   // When a parent is homozygous, the corresponding inheritance vector bits
   // are unknown. At the beginning of the chromosome, some bits in <iv> are
@@ -130,12 +183,15 @@ struct State {
   // Minimum number of recombinations to reach this state
   uint16_t minRecomb;
 
-  // type of the state: fully informative or partly informative
-  uint8_t  markerType : 2; // 2 bits: we may later add FI for both parents
+  // Which parent is heterozygous? Either 0, 1, or 2 for both, which corresponds
+  // to MT_PI states
+  uint8_t  hetParent  : 2;
 
-  // phase of the parents: 2 lowest order bits are for parent 0, next two bits
-  // are for parent 1.
-  uint8_t  parentPhase : 4;
+  // Four possible phase types for the parents: default heterozygous assignment
+  // has allele 0 on haplotype 0 and allele 1 on haplotype 1. Can flip this
+  // for each parent. Bit 0 here indicates (0 or 1) whether to flip parent 0
+  // and bit 1 indicates whether to flip parent 1
+  uint8_t  parentPhase : 2;
 };
 
 #endif // PHASER_H

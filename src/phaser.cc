@@ -2,14 +2,18 @@
 //
 // This program is distributed under the terms of the GNU General Public License
 
+#include <string.h>
+#include <bitset>
 #include "phaser.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 // initialize static members
-dynarray< dynarray<State> > Phaser::_hmm;
+dynarray< dynarray<State*> > Phaser::_hmm;
 dynarray<int> Phaser::_hmmMarker;
-uint64_t Phaser::_allBitsSet;
-uint64_t Phaser::_parBits[2];
+Phaser::state_ht Phaser::_stateHash;
+uint64_t Phaser::_parBits[3];
+uint64_t Phaser::_flips[4];
+uint64_t Phaser::_ambigFlips[4];
 
 
 // TODO: remove? At least move to a class if we keep this
@@ -76,9 +80,10 @@ void Phaser::run(PersonBulk::par_pair parents, dynarray<PersonBulk*> &children,
     // Step 3: Using states for the previous informative marker, fill in
     // unknown inheritance vector bits by propagation and generate full states.
     // Simultaneously calculate the minimum recombination counts for each state
-    // and identify which previous state(s) produce that minimum count
+    // and identify which previous state(s) produce that minimum count (i.e.,
+    // perform count-based Viterbi calculation)
     makeFullStates(partialStates, /*marker=*/ m,
-		   /*childrenMiss=*/ childrenData[G_MISS]);
+		   /*childrenMiss=*/ childrenData);
 
 
     // Clean up for next iteration
@@ -90,13 +95,28 @@ void Phaser::run(PersonBulk::par_pair parents, dynarray<PersonBulk*> &children,
 void Phaser::init(int numChildren) {
   _hmm.clear();
   _hmmMarker.clear();
+  _stateHash.set_empty_key(NULL);
 
   // alternating bits set starting with bit 0 then bit 2, ...
-  _allBitsSet = ~0ul; // initially: fewer depending on numChildren
+  uint64_t allBitsSet = ~0ul; // initially: fewer depending on numChildren
   if (numChildren < 32)
-    _allBitsSet &= (1 << (2*numChildren)) - 1;
-  _parBits[0] = 0x5555555555555555 & _allBitsSet;
-  _parBits[1] = 0xAAAAAAAAAAAAAAAA & _allBitsSet;
+    allBitsSet &= (1 << (2*numChildren)) - 1;
+  _parBits[0] = 0x5555555555555555 & allBitsSet;
+  _parBits[1] = 0xAAAAAAAAAAAAAAAA & allBitsSet;
+  _parBits[2] = allBitsSet;
+
+  // For flipping bits in all children. See comment at declaration.
+  // Storing these in an indexed array avoids the need to branch based on
+  // the index value. That is, the necessary values are already calculated and
+  // stored, but lookup in an array is more efficient than branching.
+  // TODO: is there a way to just use _parBits?
+  _flips[0] = 0;
+  _flips[1] = _parBits[0];
+  _flips[2] = _parBits[1];
+  _flips[3] = _parBits[2];
+  // For flipping bits in all ambiguous children. See lookupState()
+  _ambigFlips[0] = _ambigFlips[3] = 0;
+  _ambigFlips[1] = _ambigFlips[2] = _parBits[1];
 }
 
 // Looks up and stores the genotype values for the parents and children
@@ -389,7 +409,7 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
 // each parent transmitted to the children.
 void Phaser::makePartialStates(dynarray<State> &partialStates,
 			       int markerTypes, uint8_t parentData,
-			       uint64_t childrenData[5]) {
+			       const uint64_t childrenData[5]) {
   // Fully informative for one parent:
   if (markerTypes & (1 << MT_FI_1)) {
     makePartialFI1States(partialStates, parentData, childrenData);
@@ -414,7 +434,8 @@ void Phaser::makePartialStates(dynarray<State> &partialStates,
 // parent markers (or the states that correspond to this possibility when the
 // parent's genotypes aren't fully known)
 void Phaser::makePartialFI1States(dynarray<State> &partialStates,
-				  uint8_t parentData,uint64_t childrenData[5]) {
+				  uint8_t parentData,
+				  const uint64_t childrenData[5]) {
   uint8_t startPar, endPar;
 
   // If both parents are missing, we'll make states corresponding to each
@@ -451,15 +472,19 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     // heterozygous children are assumed to receive haplotype 1 and the
     // homozygous children haplotype 2
     newState.iv = _parBits[hetPar] & childrenData[ G_HET ];
+    // No ambiguous bits (though a missing data child could have ambiguous bits
+    // propagated from a previous marker, but that happens during full state
+    // construction
+    newState.ambig = 0;
     // No information about transmission from homozygous parent and for
     // children that are missing data:
     newState.unassigned = _parBits[homPar] | childrenData[ G_MISS ];
-    newState.markerType = MT_FI_1;
-    // 2 decimal = 10 binary. This is the currently assigned phase for the
-    // heterozygous parent. That value (with 0 [no information] for the other
-    // parent needs to be either the two lowest order bits when <hetPar> == 0
-    // or the two higher order bits when <hetPar> == 1.
-    newState.parentPhase = 2 << (2*hetPar);
+    newState.hetParent = hetPar;
+    // Won't assign <parentPhase> field as all partial states have a value of
+    // 0 here and it's never used
+    //newState.parentPhase = 0;
+
+    assert((newState.iv & newState.unassigned) == 0ul);
   }
 }
 
@@ -467,7 +492,8 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
 // the states that correspond to this possibility when the parent's genotypes
 // aren't fully known)
 void Phaser::makePartialPIStates(dynarray<State> &partialStates,
-				 uint8_t parentData, uint64_t childrenData[5]) {
+				 uint8_t parentData,
+				 const uint64_t childrenData[5]) {
   // Add space for a new (partial) state. The use of addEmpty() allows us to
   // get a reference to the state stored here and enables direct writing to
   // the stored state (no need to copy values in)
@@ -484,84 +510,338 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
   // when making full states.
   newState.iv = childrenData[ 4 ] & ( ~childrenData[ G_MISS ] );
   // Potentially ambiguous bits are those where the child is heterozygous:
-  newstate.ambig = childrenData[ G_HET ];
+  newState.ambig = childrenData[ G_HET ];
   // Have full transmission information except for children with missing data:
   newState.unassigned = childrenData[ G_MISS ];
-  newState.markerType = MT_PI;
-  // 10 decimal = 1010 binary, the currently assigned phase (see above)
-  newState.parentPhase = 10;
+  newState.hetParent = 2; // both parents heterozygous
+  // Won't assign <parentPhase> field as all partial states have a value of
+  // 0 here and it's never used
+  //newState.parentPhase = 0;
+
+  assert((newState.iv & newState.unassigned) == 0ul);
 }
 
 // Using the states at the previous marker where present and <partialStates>,
 // generates all full states. Stores these as the last value in <_hmm> and
 // stores the marker index <marker> that these states apply to in <_hmmMarker>.
-void Phaser::makeFullStates(dynarray<State> &partialStates, int marker,
-			    uint64_t childrenMiss) {
+void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
+			    const uint64_t childrenData[5]) {
   // The new entry in <_hmm> corresponds to <marker>:
   _hmmMarker.append(marker);
 
   if (_hmm.length() == 0) {
     // Partial states are equivalent to full states when there are no previous
     // states
-    _hmm.append(partialStates);
+    _hmm.addEmpty();
+    int len = partialStates.length();
+    for(int i = 0; i < len; i++) {
+      State *newState = new State(partialStates[i]);
+      _hmm[0].append(newState);
+    }
     return;
   }
 
-  int newIndex = _hmm.length();
+  int prevHMMIndex = _hmm.length() - 1;
   _hmm.addEmpty();
-  dynarray<State> &newStates  = _hmm[newIndex];
-  dynarray<State> &prevStates = _hmm[newIndex-1];
+  dynarray<State*> &prevStates = _hmm[prevHMMIndex];
 
-  int numPrev = prevStates.length();
-  for(int i = 0; i < numPrev; i++) {
-    // TODO
-    // (1) For each (current) partial state, determine the full state that
-    // prevStates[i] maps to. This is determined based on:
-    //     (a) partialStates[j].uassigned -- when a parent is uninformative
-    //         or a child is missing data, we propagate either one or two
-    //         bits, respectively, from the previous state.
-    //     (b) the phase of the parents in the partial states is arbitrary, so
-    //         can/will flip the phase of heterozygous parents in order to
-    //         produce minimum recombinations.
+  // TODO: memory leak: the keys are heap allocated
+  _stateHash.clear_no_resize();
 
-    // TODO
-    // (2) if partialStates[j].markerType == MT_PI, for heterozygous children:
-    //     (a) When two recombinations occur relative to the previous marker,
-    //         flip both corresponding bits in the inheritance vector. HAPI
-    //         avoids a state space explosion for heterozygous children at
-    //         MT_PI markers by a combinaton of only modeling states with 0
-    //         recombinations instead of 2 when possible and (b),(c) below.
-    //     (b) When one recombination occus relative to the previous marker,
-    //         leave the iv value as arbitrary and set the child as ambiguous.
-    //     Note: ambiguous bits are only set for:
-    //      (i)  children that are newly ambiguous: i.e, those that are
-    //           heterozygous and exhibit one recombination relative to the
-    //           previous marker
-    //      (ii) or children that are heterozygous and were ambiguous at the
-    //           previous marker (this status propagates forward until an
-    //           unambiguous marker, including the child being homozygous at
-    //           MT_PI)
-    //           Note: both (i) and (ii) can apply and the child is still
-    //                 ambiguous, but a child that is heterozygous and exhibits
-    //                 0 or 2 (see (a) above) recombinations relative to
-    //                 previous unambiguous inheritance vector value will be
-    //                 unambiguous.
+  uint16_t numPrev = prevStates.length();
+  for(uint16_t prevIndex = 0; prevIndex < numPrev; prevIndex++) {
+    const State *prevState = prevStates[prevIndex];
 
-    // TODO
-    // (3) Look up the full state(s) corresponding to the <iv> and <ambig>
-    // values deduced above. When a child is missing data, must do this for
-    // multiple values (TODO: say more). (TODO: what about <unassigned> or
-    // <markerType>?)
+    int numPartial = partialStates.length();
+    for(int curInd = 0; curInd < numPartial; curInd++) {
+      const State &curPartial = partialStates[curInd];
 
-    // TODO
-    // (4) For each full state, if this previous state has fewer recombinations
-    // than the current previous state, update the <prevState>, <minRecomb>, and
-    // <parentPhase> fields.
-    // TODO: how should we deal with the fact that multiple previous states
-    // can produce the same number of recombinations? (Ambiguous previous
-    // states?)
+      // (1) For each (current) partial state, determine the full state that
+      // <prevState> maps to. The <iv> and <unassigned> values are determined
+      // based the <iv> and <unassigned> fields in <prevState> and <curPartial>.
+      // <curPartial.unassigned> has bits set to 1 for the parent that is
+      // homozygous/uninformative or both bits set to 1 for a child that is
+      // missing data. There is no information in <curPartial> about the
+      // haplotype transmissions for these cases and so we propagate the
+      // inheritance vector values from the previous inheritance vector.
+      uint64_t fullIV = curPartial.iv | (prevState->iv & curPartial.unassigned);
+      uint64_t fullUnassigned = prevState->unassigned & curPartial.unassigned;
+      uint64_t fullAmbig; // assigned below
+      uint64_t hetChildBitFlip = 0;  // only applicable to MT_PI states
+      uint64_t newAmbigChildren = 0; // only applicable to MT_PI states
 
-    // TODO: also need to update <unassigned>
+      // Which haplotypes recombined? Note that the current <iv> value assumes
+      // a certain phase for the parents and may have more recombinations than
+      // another possibility. We consider all the possibilities below.
+      // The following gives us enough information to determine how to handle
+      // the heterozygous children at MT_PI markers.
+      // Note: because (fullIV & curPartial.unassigned) ==
+      //                                (prevState->iv & curPartial.unassigned),
+      // we know that no recombinations occur at those bits.
+      // We must avoid counting recombinations for bits that were unassigned
+      // in <prevState>, however.
+      uint64_t recombs = (prevState->iv ^ fullIV) & (~prevState->unassigned);
+
+      // (2) if curPartial is partly informative, for heterozygous children:
+      //     (a) When two recombinations occur relative to the previous marker
+      //         and the child was unambiguous previously, flip both
+      //         corresponding bits in the inheritance vector. HAPI avoids a
+      //         state space explosion for heterozygous children at MT_PI
+      //         markers by a combination of only modeling states with 0
+      //         recombinations instead of 2 when possible and (b),(c) below.
+      //     (b) When one recombination occurs relative to the previous marker,
+      //         leave the iv value as assigned and set the child as ambiguous.
+      //     Note: ambiguous bits are only set for:
+      //      (i)  children that are newly ambiguous: i.e, those that are
+      //           heterozygous and exhibit one recombination relative to the
+      //           previous marker
+      //      (ii) or children that are heterozygous and were ambiguous at the
+      //           previous marker (this status propagates forward until an
+      //           unambiguous marker, including the child being homozygous at
+      //           MT_PI)
+      if (curPartial.hetParent == 2) { // MT_PI state
+	// determines which previously unambiguous children that are
+	// heterozygous at this position also have two recombinations relative
+	// to <prevState>
+	uint64_t recombsPrevUnambig = recombs & (~prevState->ambig);
+	calcHetChildPIVals(recombsPrevUnambig, childrenData, hetChildBitFlip,
+			   newAmbigChildren);
+	fullIV ^= hetChildBitFlip;
+	fullAmbig = newAmbigChildren |
+	      ((childrenData[G_MISS] | childrenData[G_HET]) & prevState->ambig);
+	// Remove the recombinations from both parents from <recombs>
+	recombs ^= hetChildBitFlip;
+      }
+      else {
+	// Fully informative marker: only ambiguous bits are those where a
+	// child was ambiguous in the previous state and missing data at
+	// this marker
+	fullAmbig = childrenData[G_MISS] & prevState->ambig;
+      }
+
+      // (3) Look up or create a full state with equivalent <iv> and <ambig>
+      // values to <fullIV> and <fullAmbig>, and determine if <prevState>
+      // yields fewer recombinations for these states. If so, update the
+      // necessary values in the state.
+      // Also examines an alternate phase type which may or may not map to
+      // an equivalent state. If not, looks up that value, if so, compares the
+      // recombinations for the two possibilities separately.
+      // TODO: optimize
+      uint8_t parPhaseFlip = (curPartial.hetParent < 2) ? 1 : 3;
+      updateStates(fullIV, fullAmbig, fullUnassigned, recombs,
+		   curPartial.hetParent, /*initParPhase=default phase=*/ 0,
+		   parPhaseFlip, prevIndex, prevState->minRecomb,
+		   childrenData);
+
+      // TODO! call updateStates() a second time when hetParent == 2
+      // That is, modify <fullIV> and <fullAmbig> for 1 parent away
+    }
+  }
+  // TODO: explore the optimization in which we find the state(s) with minimum
+  // recombinations and compute the difference between all other states and
+  // this state/s. If those states have more recombinations than the numbers of
+  // differences between them, remove those states.
+}
+
+// For MT_PI states, determines:
+//   <hetChildBitFlip>  : which <iv> values need to be flipped in order to
+//                        avoid having a recombination from both parents
+//   <newAmbigChildren> : which <iv> values are newly ambiguous in this state
+//                        due to being heterozgyous and having one recombination
+//                        relative to <prevState>
+// Further details are in the comments of makeFullStates() before this
+// method gets called.
+void Phaser::calcHetChildPIVals(const uint64_t recombsPrevUnambig,
+				const uint64_t childrenData[5],
+				uint64_t &hetChildBitFlip,
+				uint64_t &newAmbigChildren) {
+  uint64_t recombsUnambigHetChild = recombsPrevUnambig & childrenData[G_HET];
+  uint64_t parRecomb[2];
+  for(int p = 0; p < 2; p++)
+    parRecomb[p] = recombsUnambigHetChild & _parBits[p];
+
+  /////////////////////////////////////////////////////////////////////////////
+  // (1) flip as needed for children that have two recombinations
+
+  // For every two bits, this sum will only be 2 decimal = 10 binary iff the
+  // parent 0 bit and the parent 1 bit are 1:
+  uint64_t sumRecomb = parRecomb[0] + (parRecomb[1] >> 1);
+  // Extract the higher order bit of the two bits for each child. The following
+  // will give a 01 binary value in the given child's two bits if both
+  // recombinations occurred
+  uint64_t bothRecomb = (sumRecomb & parRecomb[1]) >> 1;
+
+  // Can simply multiply by 3 decimal = 11 binary and the corresponding two
+  // bits will be set for any child with both haplotypes recombined.
+  // We only flip the iv values for children that were unambiguous at the
+  // previous marker:
+  hetChildBitFlip = bothRecomb * 3;
+
+  /////////////////////////////////////////////////////////////////////////////
+  // (2) identify children that are newly ambiguous
+
+  // If <sumRecomb> has a value of 01 for a given child, there's only 1
+  // recombination, which is ambiguous for heterozygous children (the only
+  // recombinations we're examining now), so:
+  uint64_t oneRecomb = sumRecomb & parRecomb[0];
+
+  newAmbigChildren = oneRecomb * 3;
+}
+
+// Look up or create a full state with equivalent <iv> and <ambig> values to
+// <fullIV> and <fullAmbig>, and determine if <prevState> yields fewer
+// recombinations for these states. If so, update the necessary values in the
+// state.
+// Also examines an alternate phase type which may or may not map to an
+// equivalent state. If not, looks up that value, if so, compares the
+// recombinations for the two possibilities separately.
+void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
+			  uint64_t fullUnassigned, uint64_t recombs,
+			  uint8_t hetParent, uint8_t initParPhase,
+			  uint8_t parPhaseFlip, uint16_t prevIndex,
+			  uint16_t prevMinRecomb,
+			  const uint64_t childrenData[5]) {
+  // How many iterations of the loop? See various comments below.
+  int numIter = 2;
+
+  // How many recombinations for the initial phase assignment?
+  size_t numRecombs = popcount(recombs);
+  uint8_t curParPhase = initParPhase;
+
+  // First, decide how many iterations of the loop below. If the opposite
+  // phase assignment yields an equivalent state, we only need to loop once.
+  // Only way the opposite phase assignment is equivalent is if there is
+  // no missing data (we propagate <iv> values from the previous marker for
+  // these individuals so changing the parent's phase at the current marker
+  // won't change anything.
+  // Also, for PI type states, must have all heterozygous markers be ambiguous.
+  // Otherwise, since flipping will necessitate fixing the unambiguous children
+  // to match the previous state (to avoid recombinations from both parents),
+  // the resulting state will not be equivalent.
+  if (childrenData[G_MISS] == 0 && (hetParent < 2 ||
+					    childrenData[G_HET] == fullAmbig)) {
+    numIter = 1;
+
+    // Determine which phase assignment has minimal recombinations before the
+    // loop below.
+
+    // Don't flip ambiguous bits: these should be the same as for the original
+    // option.
+    recombs ^= _parBits[ hetParent ] & (~fullAmbig);
+    size_t curCount = popcount(recombs);
+    if (curCount < numRecombs) {
+      numRecombs = curCount;
+      // TODO: move this comment?
+      // Note: when curPartial.hetParent == 2, we actually flip both alleles
+      // This is first because _parBits[2] has all bits set, but more
+      // importantly because flipping only one bit will in generalhave
+      // different ambiguous status whereas flipping both bits yields a IV
+      // value with the same ambiguous status.
+      curParPhase ^= parPhaseFlip;
+    }
+    else if (curCount == numRecombs) {
+      // TODO: ambiguous locally. Indicate in State value.
+    }
+  }
+
+
+  // Examine the 1 or 2 needed phase assignments
+  for(int i = 0; i < numIter; i++) {
+    // First look up or create a full state with equivalent <iv> and <ambig>
+    // values to <fullIV> and <fullAmbig>
+    // TODO: what about using <unassigned> to distinguish values? Only
+    // relevant near the beginning of a chromosome, but complex given that
+    // some markers might be either FI or PI: that value effectively
+    // distinguishes between them.
+    State *theState = lookupState(fullIV, fullAmbig);
+    // TODO: add a check for prevState->minRecomb > theState.minRecomb?
+
+    int totalRecombs = prevMinRecomb + numRecombs;
+    if (totalRecombs < theState->minRecomb) {
+      theState->iv = fullIV;
+      theState->ambig = fullAmbig;
+      theState->unassigned = fullUnassigned;
+      theState->prevState = prevIndex;
+      theState->minRecomb = totalRecombs;
+      theState->hetParent = hetParent;
+      theState->parentPhase = curParPhase;
+    }
+    else if (totalRecombs == theState->minRecomb) {
+      // TODO: ambiguous for previous state; need way to represent
+    }
+
+    if (numIter == 2) {
+      // Update the various values as needed for the inverted phase in the next
+      // iteration.
+
+      // Children that have missing data should not be flipped
+      // Also, for both parent het markers, heterozygous children's bits do
+      // not get flipped: they're either unambigous and constrained by
+      // <prevState->iv> or their ambiguous and should remain the same to stick
+      // with the convention used in <_stateHash>.
+      // Note: (hetParent >> 1) == 1 iff hetParent == 2. It is 0 for the other
+      //       values.
+      uint64_t noFlipBits = childrenData[G_MISS] |
+				      (childrenData[G_HET] * (hetParent >> 1));
+      uint64_t flipVal = _parBits[ hetParent ] & (~noFlipBits);
+      fullIV ^= flipVal;
+      recombs ^= flipVal;
+      numRecombs = popcount(recombs);
+      curParPhase ^= parPhaseFlip;
+      // <fullAmbig> and <fullUnassigned> don't change
+    }
+  }
+}
+
+// Given <iv> and <ambig>, first convert <iv> to the equivalent canonical value
+// (see comment just inside method) and then do a hash table lookup for the
+// State. If it does not exist, create it. Either way, return it to the caller.
+State * Phaser::lookupState(const uint64_t iv, const uint64_t ambig) {
+  // As inheritance vectors have four equivalent values, we have a fixed key
+  // defined via the following convention:
+  // (1) The lowest order two bits for which <iv> is ambiguous, the value
+  //     should be 00.
+  // (2) The <iv> values for ambiguous bits are either the default of 10 binary
+  //     or 00 if satisfying (1) involves inverting the inheritance value of
+  //     only one parent. (Note that for ambiguous bits, <iv> values of 10 == 01
+  //     and 00 == 11, so it suffices to only consider the case of one parent's
+  //     bits flipped).
+
+  uint64_t unambig = ~ambig;
+
+  // Get the fixed key value
+  // First determine the <iv> value for the lowest order unambiguous child:
+  int lowOrderChildBit = ffsll(unambig) - 1;
+  // Markers that have all heterozygous children are ambiguous and not
+  // considered at this stage, so there must be at least one unambiguous child:
+  assert(lowOrderChildBit >= 0);
+
+  // The genotype of the child tells us what bits we need to flip: the exact
+  // bits that are assigned 1 need to be flipped in all unambiguous children.
+  uint8_t flipType = (iv >> lowOrderChildBit) & 3;
+
+  // Conveniently, we've got _flips indexed by the 4 possible flip types with
+  // the values to flip assigned in each child:
+  uint64_t lookupIV = iv ^ (_flips[flipType] & unambig);
+  // And we've done something analogous for ambiguous bits; must flip them too:
+  lookupIV ^= _ambigFlips[flipType] & ambig;
+
+  // Do the lookup
+  iv_ambig_real theKey(lookupIV, ambig);
+  state_ht_iter it = _stateHash.find( &theKey );
+  if (it == _stateHash.end()) {
+    // need to create state
+    State *newState = new State;
+    newState->minRecomb = UINT16_MAX;
+    iv_ambig newStateKey = new iv_ambig_real(lookupIV, ambig);
+    _stateHash[ newStateKey ] = newState;
+    int curHMMIndex = _hmm.length() - 1;
+    _hmm[curHMMIndex].append(newState);
+    // caller will assign necessary values
+    return newState;
+  }
+  else {
+    return it->second;
   }
 }
 
