@@ -80,10 +80,13 @@ class Phaser {
 				    const uint64_t childrenData[5]);
     static void makeFullStates(const dynarray<State> &partialStates, int marker,
 			       const uint64_t childrenData[5]);
-    static void calcHetChildPIVals(const uint64_t recombsPrevUnambig,
-				   const uint64_t childrenData[5],
-				   uint64_t &hetChildBitFlip,
-				   uint64_t &newAmbigChildren);
+    static void calcHetChildPIVals(const uint64_t recombs,
+				   const uint64_t unambigHets,
+				   uint64_t unambigHetRecombs[4]);
+    static void flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
+			   const uint64_t childrenData[5],
+			   uint64_t propagateAmbig,
+			   const uint64_t unambigHetRecombs[4]);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t recombs,
 			     uint8_t hetParent, uint8_t initParPhase,
