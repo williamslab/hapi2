@@ -100,6 +100,8 @@ class Phaser {
       std::bitset<64> to_count(val);
       return to_count.count();
     }
+    static void backtrace();
+    static void findMinStates(int hmmIndex);
 
 
     //////////////////////////////////////////////////////////////////
@@ -108,6 +110,7 @@ class Phaser {
 
     static dynarray< dynarray<State*> > _hmm;
     static dynarray<int> _hmmMarker;
+    static dynarray<uint16_t> _minStates;
 
     // Hash table (including all the book keeping stuff) to store states
     // to enable fast lookup of states a given previous state maps to

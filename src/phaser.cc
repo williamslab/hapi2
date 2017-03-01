@@ -9,7 +9,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 // initialize static members
 dynarray< dynarray<State*> > Phaser::_hmm;
-dynarray<int> Phaser::_hmmMarker;
+dynarray<int>      Phaser::_hmmMarker;
+dynarray<uint16_t> Phaser::_minStates;
 Phaser::state_ht Phaser::_stateHash;
 uint64_t Phaser::_parBits[3];
 uint64_t Phaser::_flips[4];
@@ -81,17 +82,20 @@ void Phaser::run(PersonBulk::par_pair parents, dynarray<PersonBulk*> &children,
     makeFullStates(partialStates, /*marker=*/ m,
 		   /*childrenMiss=*/ childrenData);
 
-    ///////////////////////////////////////////////////////////////////////////
-    // Step 4: Back trace and assign phase!
-    // TODO!
-
-    // Clean up for next iteration
+    // Clean up for next marker
     partialStates.clear();
+    // TODO: memory leak: the keys are heap allocated
+    _stateHash.clear_no_resize();
   }
+
+  /////////////////////////////////////////////////////////////////////////////
+  // Step 4: HMM analysis finished. Back trace and assign phase!
+  backtrace();
 }
 
 // Do initial setup of values used throughout phasing the current chromosome
 void Phaser::init(int numChildren) {
+  // TODO: I think the clear() calls are not necessary
   _hmm.clear();
   _hmmMarker.clear();
   _stateHash.set_empty_key(NULL);
@@ -508,7 +512,15 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
     // states
     _hmm.addEmpty();
     int len = partialStates.length();
+    assert(len <= 3); // can only have 2 forms of FI partial states and one PI
     for(int i = 0; i < len; i++) {
+      if (i == 1 && partialStates[1].hetParent == 1 &&
+						partialStates[0].hetParent == 0)
+	// For the very first marker, if we're not sure which parent is
+	// heterozygous, arbitrarily pick parent 0 as such. Otherwise, since the
+	// two states are equivalent but with opposite parent labels, there will
+	// be two equal paths through the HMM.
+	continue;
       State *newState = new State(partialStates[i]);
       _hmm[0].append(newState);
     }
@@ -518,9 +530,6 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   int prevHMMIndex = _hmm.length() - 1;
   _hmm.addEmpty();
   dynarray<State*> &prevStates = _hmm[prevHMMIndex];
-
-  // TODO: memory leak: the keys are heap allocated
-  _stateHash.clear_no_resize();
 
   uint16_t numPrev = prevStates.length();
   for(uint16_t prevIndex = 0; prevIndex < numPrev; prevIndex++) {
@@ -876,5 +885,77 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t ambig) {
   }
   else {
     return it->second;
+  }
+}
+
+// Back traces and minimum recombinant phase using the states in <_hmm>.
+void Phaser::backtrace() {
+  int lastIndex = _hmm.length() - 1;
+
+  // Find the state with minimum recombinations:
+  findMinStates(lastIndex);
+
+  // TODO: this ignores ambiguities at last index
+  State *curState = _hmm[lastIndex][ _minStates[0] ];
+  State *prevState;
+  for(int hmmIndex = lastIndex; hmmIndex >= 0; hmmIndex--) {
+    // TODO! assign phase corresponding to that in <curState>
+
+    // In the previous state, resolve ambiguous <iv> values and propagate
+    // backward any <iv> values that were unassigned in that state
+    if (hmmIndex - 1 >= 0) {
+      prevState = _hmm[hmmIndex-1][ curState->prevState ];
+
+      // First propagate backward any <iv> values that were unassigned
+      // previously
+      prevState->iv |= curState->iv & prevState->unassigned;
+
+      // Note: ambiguities that remain in <curState> will not give information
+      // about resolving such in <prevState>
+      uint64_t ambigToResolve = prevState->ambig & (~curState->ambig);
+      uint64_t ambigRecombs = (curState->iv ^ prevState->iv) & ambigToResolve;
+      uint64_t parRecomb[2];
+      for(int p = 0; p < 2; p++)
+	parRecomb[p] = ambigRecombs & _parBits[p];
+      // set both bits for children that inherit a recombination from the given
+      // parents
+      parRecomb[0] |= parRecomb[0] << 1;
+      parRecomb[1] |= parRecomb[1] >> 1;
+
+      // Invert the phase for ambiguous assignments that recombine on both
+      // homologs relative to <curState>
+      uint64_t bothRecomb = parRecomb[0] & parRecomb[1];
+      prevState->iv ^= bothRecomb;
+
+      uint64_t noRecomb = ambigToResolve - (parRecomb[0] | parRecomb[1]);
+
+      // children with 0 recombinations (after flipping <bothRecomb>) are no
+      // longer ambiguous.
+      // children that are ambiguous in <prevState> _and_ recombine on one
+      // homolog relative to <curState> truly have ambiguous phase.
+      prevState->ambig -= bothRecomb | noRecomb;
+    }
+
+    // ready for next iteration
+    curState = prevState;
+  }
+}
+
+// Given an index <hmmIndex> into <_hmm>, does a linear search to find the
+// states with minimum numbers of recombinations. Stores these in <_minStates>.
+void Phaser::findMinStates(int hmmIndex) {
+  uint16_t minLastMarker = UINT16_MAX;
+
+  int numStates = _hmm[hmmIndex].length();
+  for(int i = 0; i < numStates; i++) {
+    uint16_t curRecomb = _hmm[hmmIndex][i]->minRecomb;
+    if (curRecomb < minLastMarker) {
+      minLastMarker = curRecomb;
+      _minStates.clear();
+      _minStates.append(i);
+    }
+    else if (curRecomb == minLastMarker) {
+      _minStates.append(i);
+    }
   }
 }
