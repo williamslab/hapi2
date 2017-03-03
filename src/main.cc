@@ -121,22 +121,23 @@ int main(int argc, char **argv) {
   }
 
   printf("\nPhasing families with two or more children out of %lu families... ",
-	 PersonBulk::numFamilies());
+	 NuclearFamily::numFamilies());
   fflush(stdout);
 
   // Phase!
   int numChrs = Marker::getNumChroms();
 
-  PersonBulk::fam_ht_iter iter = PersonBulk::familyIter();
-  for( ; iter != PersonBulk::familyIterEnd(); iter++) {
-    dynarray<PersonBulk*> *children = iter->second;
-    if (children->length() > 1) {
+  NuclearFamily::fam_ht_iter iter = NuclearFamily::familyIter();
+  for( ; iter != NuclearFamily::familyIterEnd(); iter++) {
+    NuclearFamily *theFam = iter->second;
+    if (theFam->numChildren() > 1) {
       // phase the current family on each chromosome successively:
-      // require at least two children as trios are better to phase in a
-      // population context
+      // require at least two children (trios are better to phase in a
+      // population context)
       for(int chrIdx = 0; chrIdx < numChrs; chrIdx++) {
-	Phaser::run(iter->first, *children, chrIdx);
+	Phaser::run(theFam, chrIdx);
       }
+      // TODO: print phase
     }
   }
 

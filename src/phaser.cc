@@ -17,13 +17,13 @@ uint64_t Phaser::_flips[4];
 uint64_t Phaser::_ambigFlips[4];
 
 
-void Phaser::run(PersonBulk::par_pair parents, dynarray<PersonBulk*> &children,
-		 int chrIdx) {
+void Phaser::run(NuclearFamily *theFam, int chrIdx) {
   // Get first and last marker numbers for the chromosome to be phased:
   int firstMarker = Marker::getFirstMarkerNum(chrIdx);
   int lastMarker = Marker::getLastMarkerNum(chrIdx);
 
-  if (children.length() > 32) {
+  int numChildren = theFam->numChildren();
+  if (numChildren > 32) {
     fflush(stdout);
     fprintf(stderr, "\n");
     fprintf(stderr, "ERROR: cannot phase more than 32 children in a family.\n");
@@ -31,7 +31,7 @@ void Phaser::run(PersonBulk::par_pair parents, dynarray<PersonBulk*> &children,
     exit(9);
   }
 
-  init(children.length());
+  init(numChildren);
 
   dynarray<State> partialStates;
 
@@ -46,8 +46,8 @@ void Phaser::run(PersonBulk::par_pair parents, dynarray<PersonBulk*> &children,
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 0: get the data for this marker
-    getFamilyData(parents, children, m, parentData, parentGenoTypes,
-		  childrenData, childGenoTypes);
+    getFamilyData(theFam, m, parentData, parentGenoTypes, childrenData,
+		  childGenoTypes);
 
 
     ///////////////////////////////////////////////////////////////////////////
@@ -57,7 +57,14 @@ void Phaser::run(PersonBulk::par_pair parents, dynarray<PersonBulk*> &children,
 
     if (mt & ((1 << MT_ERROR) | (1 << MT_AMBIG))) {
       assert(mt == (1 << MT_ERROR) || mt == (1 << MT_AMBIG));
-      // TODO: indicate that the marker is erroneous / ambiguous
+      switch(mt) {
+	case 1 << MT_ERROR:
+	  theFam->setStatus(/*marker=*/ m, PHASE_ERROR);
+	  break;
+	case 1 << MT_AMBIG:
+	  theFam->setStatus(/*marker=*/ m, PHASE_AMBIG);
+	  break;
+      }
       continue;
     }
 
@@ -90,7 +97,7 @@ void Phaser::run(PersonBulk::par_pair parents, dynarray<PersonBulk*> &children,
 
   /////////////////////////////////////////////////////////////////////////////
   // Step 4: HMM analysis finished. Back trace and assign phase!
-  backtrace();
+  backtrace(theFam);
 }
 
 // Do initial setup of values used throughout phasing the current chromosome
@@ -124,10 +131,12 @@ void Phaser::init(int numChildren) {
 // Looks up and stores the genotype values for the parents and children
 // For speedy marker type detection, uses bit representation in <*GenoTypes>
 // variables to indicate which genotypes the parents and children have.
-void Phaser::getFamilyData(PersonBulk::par_pair parents,
-			   dynarray<PersonBulk*> &children, int marker,
+void Phaser::getFamilyData(NuclearFamily *theFam, int marker,
 			   uint8_t &parentData, uint8_t &parentGenoTypes,
 			   uint64_t childrenData[5], uint8_t &childGenoTypes) {
+  NuclearFamily::par_pair parents = theFam->_parents;
+  dynarray<PersonBulk*> &children = theFam->_children;
+
   // Get data for dad (first 2 bits) and mom (bits 3-4)
   uint8_t dadData = parents->first->getBitGeno(marker);
   uint8_t momData = parents->second->getBitGeno(marker);
@@ -889,7 +898,7 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t ambig) {
 }
 
 // Back traces and minimum recombinant phase using the states in <_hmm>.
-void Phaser::backtrace() {
+void Phaser::backtrace(NuclearFamily *theFam) {
   int lastIndex = _hmm.length() - 1;
 
   // Find the state with minimum recombinations:
@@ -897,9 +906,11 @@ void Phaser::backtrace() {
 
   // TODO: this ignores ambiguities at last index
   State *curState = _hmm[lastIndex][ _minStates[0] ];
-  State *prevState;
+  State *prevState = NULL;
   for(int hmmIndex = lastIndex; hmmIndex >= 0; hmmIndex--) {
-    // TODO! assign phase corresponding to that in <curState>
+    theFam->setPhase(_hmmMarker[hmmIndex], curState->iv, curState->ambig,
+		     curState->hetParent, curState->parentPhase);
+
 
     // In the previous state, resolve ambiguous <iv> values and propagate
     // backward any <iv> values that were unassigned in that state

@@ -2,6 +2,7 @@
 //
 // This program is distributed under the terms of the GNU General Public License
 
+#include <genetio/nuclearfamily.h>
 #include <genetio/personbulk.h>
 #include <sparsehash/dense_hash_map>
 #include <bitset>
@@ -55,8 +56,7 @@ class Phaser {
     // public static methods
     //////////////////////////////////////////////////////////////////
 
-    static void run(PersonBulk::par_pair parents,
-		    dynarray<PersonBulk*> &children, int chrIdx);
+    static void run(NuclearFamily *theFam, int chrIdx);
 
   private:
     //////////////////////////////////////////////////////////////////
@@ -64,8 +64,7 @@ class Phaser {
     //////////////////////////////////////////////////////////////////
 
     static void init(int numChildren);
-    static void getFamilyData(PersonBulk::par_pair parents,
-			      dynarray<PersonBulk*> &children, int marker,
+    static void getFamilyData(NuclearFamily *theFam, int marker,
 			      uint8_t &parentData, uint8_t &parentGenoTypes,
 			      uint64_t childrenData[5],uint8_t &childGenoTypes);
     static int  getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes);
@@ -100,7 +99,7 @@ class Phaser {
       std::bitset<64> to_count(val);
       return to_count.count();
     }
-    static void backtrace();
+    static void backtrace(NuclearFamily *theFam);
     static void findMinStates(int hmmIndex);
 
 
