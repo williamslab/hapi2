@@ -56,21 +56,27 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     assert(mt > 0 && (mt & ( ~((1 << MT_N_TYPES) -1) )) == 0);
 
     if (mt & ((1 << MT_ERROR) | (1 << MT_AMBIG))) {
+      // should only be one of the above:
       assert(mt == (1 << MT_ERROR) || mt == (1 << MT_AMBIG));
       switch(mt) {
 	case 1 << MT_ERROR:
-	  theFam->setStatus(/*marker=*/ m, PHASE_ERROR);
+	  theFam->setStatus(/*marker=*/ m, PHASE_ERROR, parentData,
+			    childrenData[4]);
 	  break;
 	case 1 << MT_AMBIG:
-	  theFam->setStatus(/*marker=*/ m, PHASE_AMBIG);
+	  theFam->setStatus(/*marker=*/ m, PHASE_AMBIG, parentData,
+			    childrenData[4]);
 	  break;
       }
       continue;
     }
 
     if (mt == (1 << MT_UN)) {
-      // TODO: if the children are heterozygous, phase when parent data
-      // available; if not, choose an arbitrary phase and set the status somehow
+      // TODO: this should only happen when we have data for both parents. In
+      // that case, when the children are heterozygous, we can phase them and
+      // should do so.
+      theFam->setStatus(/*marker=*/ m, PHASE_UNINFORM, parentData,
+			childrenData[4]);
       continue;
     }
 
@@ -424,24 +430,30 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
 				  uint8_t parentData,
 				  const uint64_t childrenData[5]) {
   uint8_t startPar, endPar;
+  // TODO: getMarkerType() can infer what this genotype must be for missing
+  // data cases. Get it to do so
+  uint8_t homParGeno; // homozygous parent genotype
 
   // If both parents are missing, we'll make states corresponding to each
   // being heterozygous (other homozygous), consistent with the ambiguity
   if (parentData == (G_MISS << 2) + (G_MISS)) {
     startPar = 0;
     endPar = 1;
+    homParGeno = G_MISS;
   }
   // parent 0 het: either we have data for parent 0 as a het, or we have data
   // for parent 1 as homozygous (or both)
-  else if ((parentData & 3) == G_HET || ((parentData >> 2) & 3) == G_HOM0 ||
-	   ((parentData >> 2) & 3) == G_HOM1) {
+  else if ((parentData & 3) == G_HET || (parentData >> 2) == G_HOM0 ||
+	   (parentData >> 2) == G_HOM1) {
     startPar = endPar = 0;
+    homParGeno = parentData >> 2;
   }
   // parent 1 het:
   else {
-    assert(((parentData >> 2) & 3) == G_HET || (parentData & 3) == G_HOM0 ||
+    assert((parentData >> 2) == G_HET || (parentData & 3) == G_HOM0 ||
 	   (parentData & 3) == G_HOM1);
     startPar = endPar = 1;
+    homParGeno = parentData & 3;
   }
 
   for(uint8_t hetPar = startPar; hetPar <= endPar; hetPar++) {
@@ -467,6 +479,7 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     // children that are missing data:
     newState.unassigned = _parBits[homPar] | childrenData[ G_MISS ];
     newState.hetParent = hetPar;
+    newState.homParentGeno = homParGeno;
     // Won't assign <parentPhase> field as all partial states have a value of
     // 0 here and it's never used
     //newState.parentPhase = 0;
@@ -501,6 +514,7 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
   // Have full transmission information except for children with missing data:
   newState.unassigned = childrenData[ G_MISS ];
   newState.hetParent = 2; // both parents heterozygous
+  // Won't assign <homParentGeno> as it's meaningless when both parents are het
   // Won't assign <parentPhase> field as all partial states have a value of
   // 0 here and it's never used
   //newState.parentPhase = 0;
@@ -525,12 +539,16 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
     for(int i = 0; i < len; i++) {
       if (i == 1 && partialStates[1].hetParent == 1 &&
 						partialStates[0].hetParent == 0)
+	// TODO: not sure we want this: perhaps if we know there's no parent
+	// data anywhere on the length of the chromosome
 	// For the very first marker, if we're not sure which parent is
 	// heterozygous, arbitrarily pick parent 0 as such. Otherwise, since the
 	// two states are equivalent but with opposite parent labels, there will
 	// be two equal paths through the HMM.
 	continue;
       State *newState = new State(partialStates[i]);
+      newState->minRecomb = 0;
+      newState->parentPhase = 0;
       _hmm[0].append(newState);
     }
     return;
@@ -637,9 +655,9 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       // Above equivalent to the line below but has no branching
       //uint8_t parPhaseFlip = (isPI) ? 3 : 1;
       updateStates(fullIV, fullAmbig, fullUnassigned, recombs,
-		   curPartial.hetParent, /*initParPhase=default phase=*/ 0,
-		   parPhaseFlip, prevIndex, prevState->minRecomb,
-		   childrenData);
+		   curPartial.hetParent, curPartial.homParentGeno,
+		   /*initParPhase=default phase=*/ 0, parPhaseFlip, prevIndex,
+		   prevState->minRecomb, childrenData);
 
       // For MT_PI states, have 1 or 2 more states to examine:
       if (isPI) {
@@ -658,7 +676,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 	// Now ready to look up or create full states with the <fullIV> and
 	// <fullAmbig> values, etc.
 	updateStates(fullIV, fullAmbig, fullUnassigned, recombs,
-		     /*curPartial.hetParent=*/2,
+		     /*curPartial.hetParent=*/2, /*homParentGeno=*/G_MISS,
 		     /*initParPhase=parent 0 flip=*/ 1, /*parPhaseFlip=*/ 3,
 		     prevIndex, prevState->minRecomb, childrenData);
       }
@@ -750,9 +768,9 @@ void Phaser::flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
 // to the optimality of <prevState>.
 void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint64_t fullUnassigned, uint64_t recombs,
-			  uint8_t hetParent, uint8_t initParPhase,
-			  uint8_t parPhaseFlip, uint16_t prevIndex,
-			  uint16_t prevMinRecomb,
+			  uint8_t hetParent, uint8_t homParentGeno,
+			  uint8_t initParPhase, uint8_t parPhaseFlip,
+			  uint16_t prevIndex, uint16_t prevMinRecomb,
 			  const uint64_t childrenData[5]) {
   // How many iterations of the loop? See various comments below.
   int numIter = 2;
@@ -811,6 +829,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       theState->prevState = prevIndex;
       theState->minRecomb = totalRecombs;
       theState->hetParent = hetParent;
+      theState->homParentGeno = homParentGeno;
       theState->parentPhase = curParPhase;
     }
     else if (totalRecombs == theState->minRecomb) {
@@ -909,7 +928,8 @@ void Phaser::backtrace(NuclearFamily *theFam) {
   State *prevState = NULL;
   for(int hmmIndex = lastIndex; hmmIndex >= 0; hmmIndex--) {
     theFam->setPhase(_hmmMarker[hmmIndex], curState->iv, curState->ambig,
-		     curState->hetParent, curState->parentPhase);
+		     curState->hetParent, curState->homParentGeno,
+		     curState->parentPhase);
 
 
     // In the previous state, resolve ambiguous <iv> values and propagate

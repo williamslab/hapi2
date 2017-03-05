@@ -35,19 +35,6 @@ enum MarkerType {
 // uncommon case in such a way that the standard PLINK representation isn't
 // relied upon.
 
-// For reference, the following are the 2-bit values of all the genotypes
-// in PLINK format data:
-// 0 - homozygous for allele 0
-// 1 - missing
-// 2 - heterozygous
-// 3 - homozygous for allele 1
-enum Geno {
-  G_HOM0 = 0,
-  G_MISS = 1,
-  G_HET  = 2,
-  G_HOM1 = 3
-};
-
 struct State;
 
 class Phaser {
@@ -88,9 +75,9 @@ class Phaser {
 			   const uint64_t unambigHetRecombs[4]);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t recombs,
-			     uint8_t hetParent, uint8_t initParPhase,
-			     uint8_t parPhaseFlip, uint16_t prevIndex,
-			     uint16_t prevMinRecomb,
+			     uint8_t hetParent, uint8_t homParentGeno,
+			     uint8_t initParPhase, uint8_t parPhaseFlip,
+			     uint16_t prevIndex, uint16_t prevMinRecomb,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig);
     static size_t popcount(uint64_t val) {
@@ -190,13 +177,16 @@ struct State {
 
   // Which parent is heterozygous? Either 0, 1, or 2 for both, which corresponds
   // to MT_PI states
-  uint8_t  hetParent  : 2;
+  uint8_t  hetParent;     // Note: can fit in 2 bits
+
+  // Genotype of homozygous parent (may be missing)
+  uint8_t  homParentGeno; // Note: can fit in 2 bits
 
   // Four possible phase types for the parents: default heterozygous assignment
   // has allele 0 on haplotype 0 and allele 1 on haplotype 1. Can flip this
   // for each parent. Bit 0 here indicates (0 or 1) whether to flip parent 0
   // and bit 1 indicates whether to flip parent 1
-  uint8_t  parentPhase : 2;
+  uint8_t  parentPhase;   // Note: can fit in 2 bits
 };
 
 #endif // PHASER_H
