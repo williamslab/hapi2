@@ -127,6 +127,7 @@ int main(int argc, char **argv) {
   // Phase!
   int numChrs = Marker::getNumChroms();
 
+  Phaser::init();
   NuclearFamily::fam_ht_iter iter = NuclearFamily::familyIter();
   for( ; iter != NuclearFamily::familyIterEnd(); iter++) {
     NuclearFamily *theFam = iter->second;
@@ -134,6 +135,7 @@ int main(int argc, char **argv) {
       // phase the current family on each chromosome successively:
       // require at least two children (trios are better to phase in a
       // population context)
+      theFam->initFam();
       for(int chrIdx = 0; chrIdx < numChrs; chrIdx++) {
 	Phaser::run(theFam, chrIdx);
       }

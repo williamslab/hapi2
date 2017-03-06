@@ -31,7 +31,11 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     exit(9);
   }
 
-  init(numChildren);
+  // TODO: I think the clear() calls are not necessary
+  _hmm.clear();
+  _hmmMarker.clear();
+
+  parBitsInit(numChildren);
 
   dynarray<State> partialStates;
 
@@ -48,7 +52,6 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     // Step 0: get the data for this marker
     getFamilyData(theFam, m, parentData, parentGenoTypes, childrenData,
 		  childGenoTypes);
-
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 1: Determine marker type and check for Mendelian errors
@@ -92,12 +95,13 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     // Simultaneously calculate the minimum recombination counts for each state
     // and identify which previous state(s) produce that minimum count (i.e.,
     // perform count-based Viterbi calculation)
-    makeFullStates(partialStates, /*marker=*/ m,
-		   /*childrenMiss=*/ childrenData);
+    makeFullStates(partialStates, /*marker=*/ m, childrenData);
 
     // Clean up for next marker
     partialStates.clear();
-    // TODO: memory leak: the keys are heap allocated
+    for (state_ht_iter it = _stateHash.begin(); it != _stateHash.end(); it++) {
+      delete it->first;
+    }
     _stateHash.clear_no_resize();
   }
 
@@ -107,12 +111,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
 }
 
 // Do initial setup of values used throughout phasing the current chromosome
-void Phaser::init(int numChildren) {
-  // TODO: I think the clear() calls are not necessary
-  _hmm.clear();
-  _hmmMarker.clear();
-  _stateHash.set_empty_key(NULL);
-
+void Phaser::parBitsInit(int numChildren) {
   // alternating bits set starting with bit 0 then bit 2, ...
   uint64_t allBitsSet = ~0ul; // initially: fewer depending on numChildren
   if (numChildren < 32)
@@ -154,7 +153,7 @@ void Phaser::getFamilyData(NuclearFamily *theFam, int marker,
   parentGenoTypes = (1 << dadData) | (1 << momData);
   childGenoTypes = 0;
 
-  for(int g = 0; g < 4; g++)
+  for(int g = 0; g < 5; g++)
     childrenData[g] = 0; // note: limited to 32 children (checked above)
 
   int numChildren = children.length();
@@ -237,8 +236,16 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
       // both heterozygous for same alleles (by virtue of biallelic only data):
       // partly informative
       //
-      // No Mendelian errors possible in this case
-      return 1 << MT_PI;
+      // No Mendelian errors possible in this case, but if all children are
+      // het/missing (or a combination thereof), the marker is ambiguous
+      switch(childGenoTypes) {
+	case 1 << G_HET:
+	case 1 << G_MISS:
+	case (1 << G_HET) | (1 << G_MISS):
+	  return 1 << MT_AMBIG;
+	default:
+	  return 1 << MT_PI;
+      }
 
     //////////////////////////////////////////////////////////////////////////
     // Both parents missing
@@ -836,7 +843,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       // TODO: ambiguous for previous state; need way to represent
     }
 
-    if (numIter == 2) {
+    if (i == 0 && numIter == 2) {
       // Update the various values as needed for the inverted phase in the next
       // iteration.
 
@@ -874,7 +881,7 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t ambig) {
   //     Likewise 00 can be flipped to 11. So it suffices to only consider only
   //     two ambiguous values: 10 and 00.)
 
-  uint64_t unambig = ~ambig;
+  uint64_t unambig = _parBits[2] - ambig;
 
   //////////////////////////////////////////////////////////////////////////
   // Get the canonical key value

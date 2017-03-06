@@ -43,6 +43,7 @@ class Phaser {
     // public static methods
     //////////////////////////////////////////////////////////////////
 
+    static void init() { _stateHash.set_empty_key(NULL); }
     static void run(NuclearFamily *theFam, int chrIdx);
 
   private:
@@ -50,7 +51,7 @@ class Phaser {
     // private static methods
     //////////////////////////////////////////////////////////////////
 
-    static void init(int numChildren);
+    static void parBitsInit(int numChildren);
     static void getFamilyData(NuclearFamily *theFam, int marker,
 			      uint8_t &parentData, uint8_t &parentGenoTypes,
 			      uint64_t childrenData[5],uint8_t &childGenoTypes);
