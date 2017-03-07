@@ -936,12 +936,8 @@ void Phaser::backtrace(NuclearFamily *theFam) {
   State *curState = _hmm[lastIndex][ _minStates[0] ];
   State *prevState = NULL;
   for(int hmmIndex = lastIndex; hmmIndex >= 0; hmmIndex--) {
-    theFam->setPhase(_hmmMarker[hmmIndex], curState->iv, curState->ambig,
-		     curState->hetParent, curState->homParentGeno,
-		     curState->parentPhase);
-    // TODO: memory leak: bunch of State*s being thrown away here
-    _hmm[hmmIndex].clear();
-
+    // Number of in this state relative to <prevState>
+    uint8_t numRecombs = 0;
 
     // In the previous state, resolve ambiguous <iv> values and propagate
     // backward any <iv> values that were unassigned in that state
@@ -976,7 +972,15 @@ void Phaser::backtrace(NuclearFamily *theFam) {
       // children that are ambiguous in <prevState> _and_ recombine on one
       // homolog relative to <curState> truly have ambiguous phase.
       prevState->ambig -= bothRecomb | noRecomb;
+
+      numRecombs = curState->minRecomb - prevState->minRecomb;
     }
+
+    theFam->setPhase(_hmmMarker[hmmIndex], curState->iv, curState->ambig,
+		     curState->hetParent, curState->homParentGeno,
+		     curState->parentPhase, numRecombs);
+    // TODO: memory leak: bunch of State*s being thrown away here
+    _hmm[hmmIndex].clear();
 
     // ready for next iteration
     curState = prevState;
