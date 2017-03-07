@@ -811,6 +811,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     if (curCount < numRecombs) {
       numRecombs = curCount;
       curParPhase ^= parPhaseFlip;
+      fullIV ^= _parBits[ hetParent ] & (~fullAmbig);
     }
     else if (curCount == numRecombs) {
       // TODO: ambiguous locally. Indicate in State value.
