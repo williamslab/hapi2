@@ -5,7 +5,6 @@
 #include <genetio/nuclearfamily.h>
 #include <genetio/personbulk.h>
 #include <sparsehash/dense_hash_map>
-#include <bitset>
 
 #ifndef PHASER_H
 #define PHASER_H
@@ -89,12 +88,6 @@ class Phaser {
 			     uint16_t prevIndex, uint16_t prevMinRecomb,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig);
-    static size_t popcount(uint64_t val) {
-      // Currently using std::bitset, but the conversion is probably not free,
-      // so optimize? TODO
-      std::bitset<64> to_count(val);
-      return to_count.count();
-    }
     static void backtrace(NuclearFamily *theFam);
     static void findMinStates(int hmmIndex);
 
