@@ -43,7 +43,15 @@ class Phaser {
     // public static methods
     //////////////////////////////////////////////////////////////////
 
-    static void init() { _stateHash.set_empty_key(NULL); }
+    static void init() {
+      _stateHash.set_empty_key(NULL);
+      int maxMarkers = 0;
+      for(int c = 0; c < Marker::getNumChroms(); c++)
+	if (Marker::getNumChromMarkers(c) > maxMarkers)
+	  maxMarkers = Marker::getNumChromMarkers(c);
+      _hmm.resize(maxMarkers);
+      _hmmMarker.resize(maxMarkers);
+    }
     static void run(NuclearFamily *theFam, int chrIdx);
 
   private:

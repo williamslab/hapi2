@@ -937,6 +937,8 @@ void Phaser::backtrace(NuclearFamily *theFam) {
     theFam->setPhase(_hmmMarker[hmmIndex], curState->iv, curState->ambig,
 		     curState->hetParent, curState->homParentGeno,
 		     curState->parentPhase);
+    // TODO: memory leak: bunch of State*s being thrown away here
+    _hmm[hmmIndex].clear();
 
 
     // In the previous state, resolve ambiguous <iv> values and propagate
