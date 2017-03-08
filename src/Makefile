@@ -57,7 +57,7 @@ $(EXEC): $(OBJS) $(HEADERS)
 # The following applies if we don't use a dependency directory:
 #-include $(SRCS:.cc=.P)
 
-tags: $(SRCS) *.h
+tags: $(CPPSRCS) $(CSRCS) *.h
 	ctags --language-force=c++ --extra=+q --fields=+i --excmd=n *.cc *.h
 
 clean:
