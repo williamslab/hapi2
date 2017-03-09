@@ -481,7 +481,7 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     newState.iv = _parBits[hetPar] & childrenData[ G_HET ];
     // No ambiguous bits (though a missing data child could have ambiguous bits
     // propagated from a previous marker, but that happens during full state
-    // construction
+    // construction)
     newState.ambig = 0;
     // No information about transmission from homozygous parent and for
     // children that are missing data:
@@ -517,7 +517,9 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
   // from parent 0 and haplotype 1 from parent 1, but this will be changed
   // when making full states.
   newState.iv = childrenData[ 4 ] & ( ~childrenData[ G_MISS ] );
-  // Potentially ambiguous bits are those where the child is heterozygous:
+  // Potentially ambiguous bits are those where the child is heterozygous.
+  // If this is the first state on this chromosome, these are ambiguous and
+  // their phase is resolved by later markers.
   newState.ambig = childrenData[ G_HET ];
   // Have full transmission information except for children with missing data:
   newState.unassigned = childrenData[ G_MISS ];
@@ -567,44 +569,54 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   dynarray<State*> &prevStates = _hmm[prevHMMIndex];
 
   uint16_t numPrev = prevStates.length();
-  for(uint16_t prevIndex = 0; prevIndex < numPrev; prevIndex++) {
-    const State *prevState = prevStates[prevIndex];
+  for(uint16_t prevIdx = 0; prevIdx < numPrev; prevIdx++) {
+    const State *prevState = prevStates[prevIdx];
 
     int numPartial = partialStates.length();
-    for(int curInd = 0; curInd < numPartial; curInd++) {
-      const State &curPartial = partialStates[curInd];
+    for(int curIdx = 0; curIdx < numPartial; curIdx++) {
+      const State &curPartial = partialStates[curIdx];
 
-      // (1) For each (current) partial state, determine the full state that
-      // <prevState> maps to. The <iv> and <unassigned> values are determined
-      // based the <iv> and <unassigned> fields in <prevState> and <curPartial>.
-      // <curPartial.unassigned> has bits set to 1 for the parent that is
-      // homozygous/uninformative or both bits set to 1 for a child that is
-      // missing data. There is no information in <curPartial> about the
-      // haplotype transmissions for these cases and so we propagate the
+      // (1) For each (current) partial state, map to an initial set of full
+      // state values from <prevState>. The full <iv> and <unassigned> values
+      // are determined based the corresponding fields in <prevState> and
+      // <curPartial>. <curPartial.unassigned> has bits set to 1 for the parent
+      // that is homozygous/uninformative or both bits set to 1 for a child
+      // that is missing data. There is no information in <curPartial> about
+      // the haplotype transmissions for these cases and so we propagate the
       // inheritance vector values from the previous inheritance vector.
       uint64_t fullIV = curPartial.iv | (prevState->iv & curPartial.unassigned);
       uint64_t fullUnassigned = prevState->unassigned & curPartial.unassigned;
       uint64_t fullAmbig; // assigned below
-      // only applicable to MT_PI states:
+      /////////////////////////////////////////////////////////////////////////
+      // only applicable to MT_PI states and defined below:
       // Relative to the default phase for the parents, which bits recombined
       // in the heterozygous children that were not ambiguous at the previous
       // marker? Recombination bits may be 00, 01, 10, 11 binary:
       uint64_t unambigHetRecombs[4];
+      // Indicates the children have <prevState->iv> values that were
+      // unassigned for parent 0/1 (but not both)
+      uint64_t childPrevUnassigned[2];
       uint64_t propagateAmbig;
+      uint64_t defaultPhaseHasRecomb;
 
       // Which haplotypes recombined? Note that the current <iv> value assumes
       // a certain phase for the parents and may have more recombinations than
-      // another possibility. We consider other possibilities below.
+      // another possibility. We consider other possibilities below in
+      // updateStates() and flipPIVals().
       // The following gives us enough information to determine how to handle
       // the heterozygous children at MT_PI markers.
       // Note: because (fullIV & curPartial.unassigned) ==
       //                                (prevState->iv & curPartial.unassigned),
       // we know that no recombinations occur at <curPartial.unassigned> bits.
       // We must avoid counting recombinations for bits that were unassigned
-      // in <prevState>, however: differences between <prevState->iv> and
+      // in <prevState>, however: such differences between <prevState->iv> and
       // <fullIV> are not meaningful since those bits weren't assigned in
       // <prevState>.
       uint64_t recombs = (prevState->iv ^ fullIV) & (~prevState->unassigned);
+      // set both bits for children that inherit a recombination from the given
+      // parent
+      uint64_t parRecombs[2] = { (recombs & _parBits[0]) * 3,
+				((recombs & _parBits[1]) >> 1) * 3 };
 
       // (2) if curPartial is partly informative, for heterozygous children:
       //     (a) When two recombinations occur relative to the previous marker
@@ -619,24 +631,18 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       //      (i)  children that are newly ambiguous: i.e, those that are
       //           heterozygous and exhibit one recombination relative to the
       //           previous marker
-      //      (ii) or children that are heterozygous and were ambiguous at the
-      //           previous marker (this status propagates forward until an
-      //           unambiguous marker, including the child being homozygous at
-      //           MT_PI)
+      //      (ii) or children that are heterozygous or missing and were
+      //           ambiguous at the previous marker (this status propagates
+      //           forward until an unambiguous marker, including the child
+      //           being homozygous at MT_PI)
+      // ... Also deals with complexities around children that were unassigned
+      //     in <prevState>
       // The following gives 1 for <hetParent> == 2, 0 for <hetParent> == 0,1
       uint8_t isPI = curPartial.hetParent >> 1;
       if (isPI) { // MT_PI state
-	// determines which previously unambiguous children that are
-	// heterozygous at this position also have two recombinations relative
-	// to <prevState>
-	uint64_t unambigHets = childrenData[G_HET] & (~prevState->ambig);
-	calcHetChildPIVals(recombs, unambigHets, unambigHetRecombs);
-	// Remove the recombinations from both parents from <recombs>
-	fullIV ^= unambigHetRecombs[3];
-	recombs ^= unambigHetRecombs[3];
-	propagateAmbig =
-		(childrenData[G_MISS] | childrenData[G_HET]) & prevState->ambig;
-	fullAmbig = unambigHetRecombs[1] | unambigHetRecombs[2] |propagateAmbig;
+	handlePI(prevState, fullIV, fullAmbig, recombs, parRecombs,
+		 propagateAmbig, defaultPhaseHasRecomb, childPrevUnassigned,
+		 unambigHetRecombs, childrenData);
       }
       else {
 	// Fully informative marker: only ambiguous bits are those where a
@@ -645,7 +651,14 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 	fullAmbig = childrenData[G_MISS] & prevState->ambig;
       }
 
-      // (3) Look up or create a full state with equivalent <iv> and <ambig>
+      // (3) When possible, remove apparent recombinations from <iv> values that
+      // were ambiguous in the previous state
+      // Which children were ambiguous in the previous state but not here?
+      uint64_t ambigOnlyPrev = prevState->ambig & ~fullAmbig;
+      fixRecombFromAmbig(fullIV, recombs, parRecombs, isPI, ambigOnlyPrev,
+			 curPartial.hetParent);
+
+      // (4) Look up or create a full state with equivalent <iv> and <ambig>
       // values to <fullIV> and <fullAmbig>, and determine if <prevState>
       // yields fewer recombinations for these states than the currently stored
       // previous state (if any). If so, update the necessary values in the
@@ -662,9 +675,9 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       uint8_t parPhaseFlip = isPI * 3 + (1 - isPI);
       // Above equivalent to the line below but has no branching
       //uint8_t parPhaseFlip = (isPI) ? 3 : 1;
-      updateStates(fullIV, fullAmbig, fullUnassigned, recombs,
+      updateStates(fullIV, fullAmbig, fullUnassigned, recombs, ambigOnlyPrev,
 		   curPartial.hetParent, curPartial.homParentGeno,
-		   /*initParPhase=default phase=*/ 0, parPhaseFlip, prevIndex,
+		   /*initParPhase=default phase=*/ 0, parPhaseFlip, prevIdx,
 		   prevState->minRecomb, childrenData);
 
       // For MT_PI states, have 1 or 2 more states to examine:
@@ -677,16 +690,28 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 	// Generate the <fullIV> and <fullAmbig> values for parent 0 flipped:
 	// (Note: <fullUnassigned> does not change)
 	flipPIVals(fullIV, fullAmbig, childrenData, propagateAmbig,
-		   unambigHetRecombs);
+		   unambigHetRecombs, childPrevUnassigned,
+		   defaultPhaseHasRecomb);
 	recombs = (prevState->iv ^ fullIV) & (~prevState->unassigned);
+	parRecombs[0] = (recombs & _parBits[0]) * 3;
+	parRecombs[1] = ((recombs & _parBits[1]) >> 1) * 3;
+
+	// Which children were ambiguous in the previous state but not here?
+	ambigOnlyPrev = prevState->ambig & ~fullAmbig;
+	fixRecombFromAmbig(fullIV, recombs, parRecombs, /*isPI=*/ 1,
+			   ambigOnlyPrev, curPartial.hetParent);
+
+	// TODO: remove later
+	assert((recombs & childrenData[G_HET] & (childPrevUnassigned[0] |
+					    childPrevUnassigned[1])) == 0);
 
 	///////////////////////////////////////////////////////////////////////
 	// Now ready to look up or create full states with the <fullIV> and
 	// <fullAmbig> values, etc.
-	updateStates(fullIV, fullAmbig, fullUnassigned, recombs,
+	updateStates(fullIV, fullAmbig, fullUnassigned, recombs, ambigOnlyPrev,
 		     /*curPartial.hetParent=*/2, /*homParentGeno=*/G_MISS,
 		     /*initParPhase=parent 0 flip=*/ 1, /*parPhaseFlip=*/ 3,
-		     prevIndex, prevState->minRecomb, childrenData);
+		     prevIdx, prevState->minRecomb, childrenData);
       }
     }
   }
@@ -696,35 +721,102 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   // differences between them, remove those states.
 }
 
-// For MT_PI states, determines:
-//   <bothParRecomb>  : which heterozygous children have recombinations from
-//			both parents. These bits will be flipped.
-//   <oneParRecomb[2]> : which heterozygous children have a recombination only
-//			 from parent 0 or parent 1 (the index of the array)
-// Further details are in the comments of makeFullStates() before this
-// method gets called.
-void Phaser::calcHetChildPIVals(const uint64_t recombs,
-				const uint64_t unambigHets,
-				uint64_t unambigHetRecombs[4]) {
-  uint64_t recombsUnambigHetChild = recombs & unambigHets;
-  uint64_t parRecomb[2];
+// See long comment in makeFullStates() -- handles heterozygous children and
+// previously unassigned <iv> values at MT_PI states:
+void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
+		      uint64_t &fullAmbig, uint64_t &recombs,
+		      uint64_t parRecombs[2], uint64_t &propagateAmbig,
+		      uint64_t &defaultPhaseHasRecomb,
+		      uint64_t childPrevUnassigned[2],
+		      uint64_t unambigHetRecombs[4],
+		      const uint64_t childrenData[5]) {
+  // Set both bits for any children that have unassigned values for each
+  // parent in the previous state:
+  childPrevUnassigned[0] = (prevState->unassigned & _parBits[0]) * 3;
+  childPrevUnassigned[1] = ((prevState->unassigned & _parBits[1]) >> 1)*3;
+  uint64_t bothPrevUnassigned = childPrevUnassigned[0] & childPrevUnassigned[1];
+  uint64_t eitherPrevUnassigned = childPrevUnassigned[0]|childPrevUnassigned[1];
+  // Want <childPrevUnassigned> to be specific to each parent, not both.
+  // This comes up later in flipPIVals()
   for(int p = 0; p < 2; p++)
-    parRecomb[p] = recombsUnambigHetChild & _parBits[p];
+    childPrevUnassigned[p] -= bothPrevUnassigned;
 
-  // set both bits for children that inherit a recombination from the given
-  // parents
-  parRecomb[0] |= parRecomb[0] << 1;
-  parRecomb[1] |= parRecomb[1] >> 1;
+  // Determine the recombination values for heterozygous children that are
+  // unambiguous and fully assigned in <prevState>. To avoid recombination on
+  // both homologs on these children, we must sometimes flip the <fullIV>
+  // values. Also, a single recombination is ambiguous and must be accounted
+  // for. See below
+  uint64_t unambigAssignedHets = childrenData[G_HET] &
+				    ~(prevState->ambig | eitherPrevUnassigned);
+  calcHetChildPIRecombs(parRecombs, unambigAssignedHets, unambigHetRecombs);
+
+  // Remove the recombinations from both parents for het children (whose
+  // <iv> values can be swapped)
+  fullIV ^= unambigHetRecombs[3];
+  recombs ^= unambigHetRecombs[3];
+  for(int p = 0; p < 2; p++)
+    parRecombs[p] -= unambigHetRecombs[3];
+
+  // Determine which children are ambiguous:
+  // (1) Some from the previous marker (when het/missing here):
+  propagateAmbig =
+		(childrenData[G_MISS] | childrenData[G_HET]) & prevState->ambig;
+  // (2) Near the beginning of the chromosome, if a child has not had either
+  //     <iv> value assigned previously and is het here, it is ambiguous. We
+  //     can choose either phase assignment without affecting the number of
+  //     recombinations.
+  //   (We put this together with propagateAmbig so that it gets reused for the
+  //   alternate phase types addressed in flipPIVals().)
+  propagateAmbig |= childrenData[G_HET] & bothPrevUnassigned;
+  // (3) Some newly ambiguous due to recombinations from one parent:
+  uint64_t newAmbigChildren = unambigHetRecombs[1] | unambigHetRecombs[2];
+  fullAmbig = newAmbigChildren | propagateAmbig;
+
+  // One final issue with unassigned <iv> values:
+  // For het children with only one bit unassigned previously, we can flip both
+  // <iv> values to avoid recombinations with respect to the parent that is
+  // assigned in the previous marker and not incur a recombination from the
+  // alternate (currently unassigned) parent.
+  // Note: <eitherPrevUnassigned> includes <bothPrevUnassigned>, but this is
+  // OK since there are no recombinations for <bothPrevUnassigned>
+  uint64_t hetChildPrevUnassign = childrenData[G_HET] & eitherPrevUnassigned;
+  // Need to have both bits set for any children with a recombination from
+  // either parent:
+  defaultPhaseHasRecomb = parRecombs[0] | parRecombs[1];
+  // Flip the <iv> value and remove any recombinations for these children:
+  uint64_t toRemove = hetChildPrevUnassign & defaultPhaseHasRecomb;
+  fullIV ^= toRemove;
+  recombs &= ~toRemove;
+
+  // TODO: remove later
+  assert(recombs == ((prevState->iv ^ fullIV) & (~prevState->unassigned) &
+			~(childrenData[G_HET] &
+			   (childPrevUnassigned[0] | childPrevUnassigned[1]))));
+}
+
+// For MT_PI states, determines <unambigHetRecombs>, an array with both bits
+// set when a heterozygous but unambiguous child has the indexed type of
+// recombinations. For example, if the children's bits in <unambigHetRecombs[1]>
+// are set, that child recombines on parent 0. Index 0 corresponds to no
+// recombinations, 2 corresponds to parent 1 recombinations, 3 corresponds to
+// both parents recombining.
+void Phaser::calcHetChildPIRecombs(const uint64_t parRecombs[2],
+				   const uint64_t unambigAssignedHets,
+				   uint64_t unambigHetRecombs[4]) {
+  uint64_t parRecombUnambigHet[2];
+  for(int p = 0; p < 2; p++)
+    parRecombUnambigHet[p] = parRecombs[p] & unambigAssignedHets;
 
   // unambiguous het children that exhibit recombinations from both parents:
-  unambigHetRecombs[3] = parRecomb[0] & parRecomb[1];
+  unambigHetRecombs[3] = parRecombUnambigHet[0] & parRecombUnambigHet[1];
 
   // unambiguous het children with a recombination from only one parent:
   for(int r = 1; r <= 2; r++)
-    unambigHetRecombs[r] = parRecomb[r-1] ^ unambigHetRecombs[3];
+    unambigHetRecombs[r] = parRecombUnambigHet[r-1] ^ unambigHetRecombs[3];
 
   // unambiguous het children with no recombinations:
-  unambigHetRecombs[0] = unambigHets - (parRecomb[0] | parRecomb[1]);
+  unambigHetRecombs[0] = unambigAssignedHets -
+			      (parRecombUnambigHet[0] | parRecombUnambigHet[1]);
 }
 
 // For MT_PI states, flipping a single parent's phase is complex for
@@ -734,7 +826,9 @@ void Phaser::calcHetChildPIVals(const uint64_t recombs,
 // and <fullAmbig> values generated for the default phase.
 void Phaser::flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
 			const uint64_t childrenData[5], uint64_t propagateAmbig,
-			const uint64_t unambigHetRecombs[4]) {
+			const uint64_t unambigHetRecombs[4],
+			const uint64_t childPrevUnassigned[2],
+			uint64_t defaultPhaseHasRecomb) {
   ///////////////////////////////////////////////////////////////////////
   // Get the flipped <fullIV> value:
 
@@ -753,8 +847,19 @@ void Phaser::flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
   // Default <iv> value was 10 binary. Any children that recombined on parent 1
   // under that setup now have no recombinations and have the correct <iv>
   // value. Children that recombined on parent 0 now have 2 recombinations and
-  // need to be flipped to 11 binary. Recombination on parent 0 is 01 binary:
+  // need to be flipped to 11 binary. Recombination on parent 0 is index 01:
   newFullIV ^= unambigHetRecombs[1];
+  // For het children that had unassigned <prevState->iv> values, can flip the
+  // <iv> so that no recombinations result. Since the default assignment has
+  // <iv> value of 10 binary, and the value now is 00, if the default phase
+  // has a recombination and parent 0 is unassigned, we'd like to have value 11
+  // so that there's no recombination from parent 1. Alternatively, if the
+  // default phase has no recombination and parent 1 is unassigned, we'd also
+  // like a value of 00 so that there's no recombination from parent 0:
+  uint64_t flipPartlyUnassigned = childrenData[G_HET] &
+			    ((childPrevUnassigned[0] & ~defaultPhaseHasRecomb) |
+			     (childPrevUnassigned[1] & defaultPhaseHasRecomb));
+  newFullIV ^= flipPartlyUnassigned;
   // Done!
   fullIV = newFullIV;
 
@@ -763,6 +868,44 @@ void Phaser::flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
   uint64_t newAmbigChildren = unambigHetRecombs[0] | unambigHetRecombs[3];
 
   fullAmbig = newAmbigChildren | propagateAmbig;
+}
+
+// For children with an ambiguous <iv> value in the previous state,
+// apparent recombinations to the current state are not recombinations since
+// we can flip the <iv> value in the previous state. Here we flip any such
+// recombinations to avoid counting them. The <iv> value in the previous state
+// gets changed during back tracing.
+void Phaser::fixRecombFromAmbig(uint64_t &fullIV, uint64_t &recombs,
+				const uint64_t parRecombs[2], uint8_t isPI,
+				uint64_t ambigOnlyPrev, uint8_t hetParent) {
+  // Get their recombinations specific to each parent:
+  uint64_t parRecombsFromAmbig[2];
+  for(int p = 0; p < 2; p++)
+    parRecombsFromAmbig[p] = ambigOnlyPrev & parRecombs[p];
+
+  // Two cases:
+  // (1) if the current state is PI (i.e., <isPI> == 1), we will only flip when
+  // there's a recombination on both parents
+  // The following is only non-zero if <isPI> == 1:
+  uint64_t toRemove = isPI * (parRecombsFromAmbig[0] & parRecombsFromAmbig[1]);
+  // (2) If the current state is FI (i.e., <isPI> == ), we will only flip when
+  // there's a recombination for the parent that is heterozygous here (note that
+  // the homozygous parent won't have observed recombinations anyway).
+  // The following is only non-zero if <isPI> == 0:
+  toRemove += (1 - isPI) * (parRecombsFromAmbig[ hetParent ] &
+						      _parBits[ hetParent ] );
+  // Can/will flip <prevState->iv> during back tracing, so don't count
+  // recombinations now
+  recombs ^= toRemove;
+
+  // When we change the number of recombinations, we have decided that the
+  // previous state should have inverted <iv>. In this case, when <isPI> == 0,
+  // the <iv> values corresponding to the homozygous parent are no longer
+  // reflective of the value that will occur once this flipping occurs.
+  // Therefore, we must flip the corresponding bits in <fullIV>:
+  uint8_t homozyParent = (1 - isPI) * (1 - hetParent);
+  fullIV ^= (1 - isPI) * (parRecombsFromAmbig[hetParent] &
+						      _parBits[ homozyParent ]);
 }
 
 // Look up or create a full state with equivalent <iv> and <ambig> values to
@@ -776,9 +919,10 @@ void Phaser::flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
 // to the optimality of <prevState>.
 void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint64_t fullUnassigned, uint64_t recombs,
-			  uint8_t hetParent, uint8_t homParentGeno,
-			  uint8_t initParPhase, uint8_t parPhaseFlip,
-			  uint16_t prevIndex, uint16_t prevMinRecomb,
+			  uint64_t ambigOnlyPrev, uint8_t hetParent,
+			  uint8_t homParentGeno, uint8_t initParPhase,
+			  uint8_t parPhaseFlip, uint16_t prevIndex,
+			  uint16_t prevMinRecomb,
 			  const uint64_t childrenData[5]) {
   // How many iterations of the loop? See various comments below.
   int numIter = 2;
@@ -789,16 +933,21 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 
   // First, decide how many iterations of the loop below. If the opposite
   // phase assignment yields an equivalent state, we only need to loop once.
-  // Only way the opposite phase assignment is equivalent is if there is
-  // no missing data (we propagate <iv> values from the previous marker for
-  // missing data children so changing the parent's phase at the current marker
-  // will modify some children's <iv> values but not the missing data ones).
-  // Also, for PI type states, must have all heterozygous markers be ambiguous.
+  // Only way the opposite phase assignment is equivalent is if:
+  // (1) There is no missing data (we propagate <iv> values from the previous
+  // marker for missing data children so changing the parent's phase at the
+  // current marker will modify some children's <iv> values but not the missing
+  // data ones).
+  // (2) Similarly, there have to be no children that were only ambiguous
+  // in the previous state and not here. To avoid recombinations relative to
+  // the previous state the previous <iv> value can be flipped. When this
+  // happens, the propagated <iv> value differs between the two possible states.
+  // (3) For PI type states, must have all heterozygous markers be ambiguous.
   // Otherwise, since flipping will necessitate fixing the unambiguous children
   // to match the previous state (to avoid recombinations from both parents),
   // the resulting state will not be equivalent (akin to missing data children).
-  if (childrenData[G_MISS] == 0 && (hetParent < 2 ||
-					    childrenData[G_HET] == fullAmbig)) {
+  if (childrenData[G_MISS] == 0 && ambigOnlyPrev == 0 &&
+			(hetParent < 2 || childrenData[G_HET] == fullAmbig)) {
     numIter = 1;
 
     // Determine which phase assignment has minimal recombinations before the
@@ -806,6 +955,10 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 
     // Don't flip ambiguous bits: these should be the same as for the original
     // option to stay with the convention used in the hash (see lookupState()).
+    // Also don't flip recombs when the previous state was ambiguous. Earlier
+    // code removed recombs that could be addressed by flipping that ambiguous
+    // <iv> value and that change applies equally to both phase possibilities
+    // here.
     recombs ^= _parBits[ hetParent ] & (~fullAmbig);
     size_t curCount = popcount(recombs);
     if (curCount < numRecombs) {
@@ -856,11 +1009,18 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       // stick with the convention used in <_stateHash>.
       // Note: (hetParent >> 1) == 1 iff hetParent == 2. It is 0 for the other
       //       values.
-      uint64_t noFlipBits = childrenData[G_MISS] |
-				      (childrenData[G_HET] * (hetParent >> 1));
+      uint8_t isPI = hetParent >> 1;
+      uint64_t noFlipBits = childrenData[G_MISS] | (childrenData[G_HET] * isPI);
       uint64_t flipVal = _parBits[ hetParent ] & (~noFlipBits);
+      // When the child was ambiguous previously and <isPI> == 0, we need to
+      // flip the propagated <iv> values from the homozygous parent, so:
+      flipVal |= (1 - isPI) * _parBits[ 1 - hetParent ] & ambigOnlyPrev;
       fullIV ^= flipVal;
-      recombs ^= flipVal;
+      // Don't flip recombs when the previous state was ambiguous. Earlier
+      // code removed recombs that could be addressed by flipping that ambiguous
+      // <iv> value and that change applies equally to both phase possibilities
+      // here.
+      recombs ^= flipVal & ~ambigOnlyPrev;
       numRecombs = popcount(recombs);
       curParPhase ^= parPhaseFlip;
       // <fullAmbig> and <fullUnassigned> don't change
@@ -952,20 +1112,17 @@ void Phaser::backtrace(NuclearFamily *theFam) {
       // about resolving such in <prevState>
       uint64_t ambigToResolve = prevState->ambig & (~curState->ambig);
       uint64_t ambigRecombs = (curState->iv ^ prevState->iv) & ambigToResolve;
-      uint64_t parRecomb[2];
-      for(int p = 0; p < 2; p++)
-	parRecomb[p] = ambigRecombs & _parBits[p];
       // set both bits for children that inherit a recombination from the given
-      // parents
-      parRecomb[0] |= parRecomb[0] << 1;
-      parRecomb[1] |= parRecomb[1] >> 1;
+      // parent
+      uint64_t parRecombs[2] = { (ambigRecombs & _parBits[0]) * 3,
+				((ambigRecombs & _parBits[1]) >> 1) * 3 };
 
       // Invert the phase for ambiguous assignments that recombine on both
       // homologs relative to <curState>
-      uint64_t bothRecomb = parRecomb[0] & parRecomb[1];
+      uint64_t bothRecomb = parRecombs[0] & parRecombs[1];
       prevState->iv ^= bothRecomb;
 
-      uint64_t noRecomb = ambigToResolve - (parRecomb[0] | parRecomb[1]);
+      uint64_t noRecomb = ambigToResolve - (parRecombs[0] | parRecombs[1]);
 
       // children with 0 recombinations (after flipping <bothRecomb>) are no
       // longer ambiguous.

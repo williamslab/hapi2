@@ -74,18 +74,31 @@ class Phaser {
 				    const uint64_t childrenData[5]);
     static void makeFullStates(const dynarray<State> &partialStates, int marker,
 			       const uint64_t childrenData[5]);
-    static void calcHetChildPIVals(const uint64_t recombs,
-				   const uint64_t unambigHets,
-				   uint64_t unambigHetRecombs[4]);
+    static void handlePI(const State *prevState, uint64_t &fullIV,
+			 uint64_t &fullAmbig, uint64_t &recombs,
+			 uint64_t parRecombs[2], uint64_t &propagateAmbig,
+			 uint64_t &defaultPhaseHasRecomb,
+			 uint64_t childPrevUnassigned[2],
+			 uint64_t unambigHetRecombs[4],
+			 const uint64_t childrenData[5]);
+    static void calcHetChildPIRecombs(const uint64_t parRecombs[2],
+				      const uint64_t unambigHets,
+				      uint64_t unambigHetRecombs[4]);
     static void flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
 			   const uint64_t childrenData[5],
 			   uint64_t propagateAmbig,
-			   const uint64_t unambigHetRecombs[4]);
+			   const uint64_t unambigHetRecombs[4],
+			   const uint64_t childPrevUnassigned[2],
+			   uint64_t defaultPhaseHasRecomb);
+    static void fixRecombFromAmbig(uint64_t &fullIV, uint64_t &recombs,
+				   const uint64_t parRecombs[2], uint8_t isPI,
+				   uint64_t ambigOnlyPrev, uint8_t hetParent);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t recombs,
-			     uint8_t hetParent, uint8_t homParentGeno,
-			     uint8_t initParPhase, uint8_t parPhaseFlip,
-			     uint16_t prevIndex, uint16_t prevMinRecomb,
+			     uint64_t ambigOnlyPrev, uint8_t hetParent,
+			     uint8_t homParentGeno, uint8_t initParPhase,
+			     uint8_t parPhaseFlip, uint16_t prevIndex,
+			     uint16_t prevMinRecomb,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig);
     static void backtrace(NuclearFamily *theFam);
