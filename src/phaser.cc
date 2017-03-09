@@ -57,7 +57,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     ///////////////////////////////////////////////////////////////////////////
     // Step 1: Determine marker type and check for Mendelian errors
     int mt = getMarkerType(parentGenoTypes, childGenoTypes);
-    assert(mt > 0 && (mt & ( ~((1 << MT_N_TYPES) -1) )) == 0);
+    assert(mt > 0 && (mt & ~((1 << MT_N_TYPES) -1) ) == 0);
 
     if (mt & ((1 << MT_ERROR) | (1 << MT_AMBIG))) {
       // should only be one of the above:
@@ -516,7 +516,7 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
   // This also assumes that all heterozygous children received haplotype 0
   // from parent 0 and haplotype 1 from parent 1, but this will be changed
   // when making full states.
-  newState.iv = childrenData[ 4 ] & ( ~childrenData[ G_MISS ] );
+  newState.iv = childrenData[ 4 ] & ~childrenData[ G_MISS ];
   // Potentially ambiguous bits are those where the child is heterozygous.
   // If this is the first state on this chromosome, these are ambiguous and
   // their phase is resolved by later markers.
@@ -612,7 +612,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       // in <prevState>, however: such differences between <prevState->iv> and
       // <fullIV> are not meaningful since those bits weren't assigned in
       // <prevState>.
-      uint64_t recombs = (prevState->iv ^ fullIV) & (~prevState->unassigned);
+      uint64_t recombs = (prevState->iv ^ fullIV) & ~prevState->unassigned;
       // set both bits for children that inherit a recombination from the given
       // parent
       uint64_t parRecombs[2] = { (recombs & _parBits[0]) * 3,
@@ -692,7 +692,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 	flipPIVals(fullIV, fullAmbig, childrenData, propagateAmbig,
 		   unambigHetRecombs, childPrevUnassigned,
 		   defaultPhaseHasRecomb);
-	recombs = (prevState->iv ^ fullIV) & (~prevState->unassigned);
+	recombs = (prevState->iv ^ fullIV) & ~prevState->unassigned;
 	parRecombs[0] = (recombs & _parBits[0]) * 3;
 	parRecombs[1] = ((recombs & _parBits[1]) >> 1) * 3;
 
@@ -789,7 +789,7 @@ void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
   recombs &= ~toRemove;
 
   // TODO: remove later
-  assert(recombs == ((prevState->iv ^ fullIV) & (~prevState->unassigned) &
+  assert(recombs == ((prevState->iv ^ fullIV) & ~prevState->unassigned &
 			~(childrenData[G_HET] &
 			   (childPrevUnassigned[0] | childPrevUnassigned[1]))));
 }
@@ -959,12 +959,12 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // code removed recombs that could be addressed by flipping that ambiguous
     // <iv> value and that change applies equally to both phase possibilities
     // here.
-    recombs ^= _parBits[ hetParent ] & (~fullAmbig);
+    recombs ^= _parBits[ hetParent ] & ~fullAmbig;
     size_t curCount = popcount(recombs);
     if (curCount < numRecombs) {
       numRecombs = curCount;
       curParPhase ^= parPhaseFlip;
-      fullIV ^= _parBits[ hetParent ] & (~fullAmbig);
+      fullIV ^= _parBits[ hetParent ] & ~fullAmbig;
     }
     else if (curCount == numRecombs) {
       // TODO: ambiguous locally. Indicate in State value.
@@ -1011,7 +1011,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       //       values.
       uint8_t isPI = hetParent >> 1;
       uint64_t noFlipBits = childrenData[G_MISS] | (childrenData[G_HET] * isPI);
-      uint64_t flipVal = _parBits[ hetParent ] & (~noFlipBits);
+      uint64_t flipVal = _parBits[ hetParent ] & ~noFlipBits;
       // When the child was ambiguous previously and <isPI> == 0, we need to
       // flip the propagated <iv> values from the homozygous parent, so:
       flipVal |= (1 - isPI) * _parBits[ 1 - hetParent ] & ambigOnlyPrev;
@@ -1110,7 +1110,7 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 
       // Note: ambiguities that remain in <curState> will not give information
       // about resolving such in <prevState>
-      uint64_t ambigToResolve = prevState->ambig & (~curState->ambig);
+      uint64_t ambigToResolve = prevState->ambig & ~curState->ambig;
       uint64_t ambigRecombs = (curState->iv ^ prevState->iv) & ambigToResolve;
       // set both bits for children that inherit a recombination from the given
       // parent
