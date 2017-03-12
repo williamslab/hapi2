@@ -92,10 +92,14 @@ class Phaser {
 			   uint64_t defaultPhaseHasRecomb);
     static void fixRecombFromAmbig(uint64_t &fullIV, uint64_t &recombs,
 				   const uint64_t parRecombs[2], uint8_t isPI,
-				   uint64_t ambigOnlyPrev, uint8_t hetParent);
+				   uint64_t ambigOnlyPrev, uint8_t hetParent,
+				   uint64_t &stdAmbigOnlyPrev,
+				   uint64_t &ambig1OnlyPrev,
+				   uint64_t &ambig1Unassigned);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
-			     uint64_t fullUnassigned, uint64_t recombs,
-			     uint64_t ambigOnlyPrev, uint8_t hetParent,
+			     uint64_t fullUnassigned, uint64_t ambig1Unassigned,
+			     uint64_t recombs, uint64_t stdAmbigOnlyPrev,
+			     uint64_t ambig1OnlyPrev, uint8_t hetParent,
 			     uint8_t homParentGeno, uint8_t initParPhase,
 			     uint8_t parPhaseFlip, uint16_t prevIndex,
 			     uint16_t prevMinRecomb,
