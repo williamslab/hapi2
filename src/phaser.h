@@ -101,7 +101,7 @@ class Phaser {
 			     uint64_t recombs, uint64_t prevUnassigned,
 			     uint64_t stdAmbigOnlyPrev, uint64_t ambig1OnlyPrev,
 			     uint8_t hetParent, uint8_t homParentGeno,
-			     uint8_t initParPhase, uint8_t parPhaseFlip,
+			     uint8_t initParPhase, uint8_t altPhaseType,
 			     uint16_t prevIndex, uint16_t prevMinRecomb,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig);

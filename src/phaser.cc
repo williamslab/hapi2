@@ -674,19 +674,16 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       // recombinations for the two possibilities separately.
       //
       // What type of phase is the alternative? For MT_PI states, the
-      // alternative, which must have the same ambiguous bits, is different for
-      // both parents, so the type is 3 decimal == 11 binary (as opposed to the
-      // default of 0).
+      // alternative, which must have the same ambiguous bits, is
+      // 3 decimal == 11 binary (vs. default of 0).
       // See just below for what this code does:
-      // TODO: don't use Flip, but the actual value (one less operation and less
-      // confusing to boot)
-      uint8_t parPhaseFlip = isPI * 3 + (1 - isPI);
+      uint8_t altPhaseType = isPI * 3 + (1 - isPI);
       // Above equivalent to the line below but has no branching
-      //uint8_t parPhaseFlip = (isPI) ? 3 : 1;
+      //uint8_t altPhaseType = (isPI) ? 3 : 1;
       updateStates(fullIV, fullAmbig, fullUnassigned, ambig1Unassigned, recombs,
 		   prevState->unassigned, stdAmbigOnlyPrev, ambig1OnlyPrev,
 		   curPartial.hetParent, curPartial.homParentGeno,
-		   /*initParPhase=default phase=*/ 0, parPhaseFlip, prevIdx,
+		   /*initParPhase=default phase=*/ 0, altPhaseType, prevIdx,
 		   prevState->minRecomb, childrenData);
 
       // For MT_PI states, have 1 or 2 more states to examine:
@@ -723,8 +720,8 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 		     recombs, prevState->unassigned, stdAmbigOnlyPrev,
 		     ambig1OnlyPrev, /*curPartial.hetParent=*/2,
 		     /*homParentGeno=*/G_MISS, /*initParPhase=parent 0 flip=*/1,
-		     /*parPhaseFlip=*/ 3, prevIdx, prevState->minRecomb,
-		     childrenData);
+		     /*altPhaseType=parent 1 flip=*/ 2, prevIdx,
+		     prevState->minRecomb, childrenData);
       }
     }
   }
@@ -986,7 +983,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint64_t recombs, uint64_t prevUnassigned,
 			  uint64_t stdAmbigOnlyPrev, uint64_t ambig1OnlyPrev,
 			  uint8_t hetParent, uint8_t homParentGeno,
-			  uint8_t initParPhase, uint8_t parPhaseFlip,
+			  uint8_t initParPhase, uint8_t altPhaseType,
 			  uint16_t prevIndex, uint16_t prevMinRecomb,
 			  const uint64_t childrenData[5]) {
   // How many iterations of the loop? See various comments below.
@@ -1032,11 +1029,14 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // here.
     // Note we exclude any cases where the previous state had standard ambig
     // values in the condition above (see comment).
-    recombs ^= _parBits[ hetParent ] & ~(fullAmbig | (isPI * ambig1OnlyPrev));
+    // Finally, don't inadvertently introduce recombinations by flipping values
+    // that aren't assigned in the previous state.
+    recombs ^= _parBits[ hetParent ] & ~(fullAmbig | (isPI * ambig1OnlyPrev) |
+								prevUnassigned);
     size_t curCount = popcount(recombs);
     if (curCount < numRecombs) {
       numRecombs = curCount;
-      curParPhase ^= parPhaseFlip;
+      curParPhase = altPhaseType;
       fullIV ^= _parBits[ hetParent ] & ~fullAmbig;
       ambig1Unassigned ^=(1 - isPI) * (ambig1OnlyPrev & _parBits[homozyParent]);
     }
@@ -1095,10 +1095,12 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       // These either have 0 recombinations and should stay at 0 or 1 and should
       // stay at 1. The fixRecombFromAmbig() method removed instances of 2
       // recombinations (coverting them to 0) and these should remain changed.
-      recombs ^= flipVal & ~(stdAmbigOnlyPrev | (isPI * ambig1OnlyPrev));
-      recombs &= ~prevUnassigned;
+      // Finally, don't inadvertently introduce recombinations by flipping
+      // values that aren't assigned in the previous state.
+      recombs ^= flipVal & ~(stdAmbigOnlyPrev | (isPI * ambig1OnlyPrev) |
+								prevUnassigned);
       numRecombs = popcount(recombs);
-      curParPhase ^= parPhaseFlip;
+      curParPhase = altPhaseType;
 
       // ambig1 values affect fullUnassigned. The value inverts depending on the
       // phase type at MT_FI markers. Note that the unassigned values are for
