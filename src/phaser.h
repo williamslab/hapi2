@@ -98,11 +98,11 @@ class Phaser {
 				   uint64_t &ambig1Unassigned);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t ambig1Unassigned,
-			     uint64_t recombs, uint64_t stdAmbigOnlyPrev,
-			     uint64_t ambig1OnlyPrev, uint8_t hetParent,
-			     uint8_t homParentGeno, uint8_t initParPhase,
-			     uint8_t parPhaseFlip, uint16_t prevIndex,
-			     uint16_t prevMinRecomb,
+			     uint64_t recombs, uint64_t prevUnassigned,
+			     uint64_t stdAmbigOnlyPrev, uint64_t ambig1OnlyPrev,
+			     uint8_t hetParent, uint8_t homParentGeno,
+			     uint8_t initParPhase, uint8_t parPhaseFlip,
+			     uint16_t prevIndex, uint16_t prevMinRecomb,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig);
     static void backtrace(NuclearFamily *theFam);
