@@ -75,10 +75,11 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
       continue;
     }
 
-    if (mt == (1 << MT_UN)) {
-      // TODO: this should only happen when we have data for both parents. In
-      // that case, when the children are heterozygous, we can phase them and
-      // should do so.
+    if (mt & (1 << MT_UN)) {
+      // TODO: When we the children are heterozygous, phase with parent's
+      // data. Note that if we are missing data for both parents and all
+      // the children are heterozygous, the marker is ambiguous and handled
+      // just above.
       theFam->setStatus(/*marker=*/ m, PHASE_UNINFORM, parentData,
 			childrenData[4]);
       continue;
@@ -419,15 +420,6 @@ void Phaser::makePartialStates(dynarray<State> &partialStates,
   // Partly informative
   if (markerTypes & (1 << MT_PI)) {
     makePartialPIStates(partialStates, parentData, childrenData);
-  }
-
-  // Uninformative
-  if (markerTypes & (1 << MT_UN)) {
-    // TODO: in fact, a state with this genotype for the parents will always
-    // have 0 recombinations observed. Perhaps we need a way of evaluating the
-    // evidence for or against this case? In some sense should assume the
-    // marker is not this and use surrounding markers to revert to this case
-    // only when necessary
   }
 }
 
