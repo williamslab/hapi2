@@ -62,12 +62,14 @@ class Phaser {
     static void getFamilyData(NuclearFamily *theFam, int marker,
 			      uint8_t &parentData, uint8_t &parentGenoTypes,
 			      uint64_t childrenData[5],uint8_t &childGenoTypes);
-    static int  getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes);
+    static int  getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
+			      uint8_t &homParGeno);
     static void makePartialStates(dynarray<State> &partialStates,
 				  int markerTypes, uint8_t parentData,
+				  uint8_t homParGeno,
 				  const uint64_t childrenData[5]);
     static void makePartialFI1States(dynarray<State> &partialStates,
-				     uint8_t parentData,
+				     uint8_t parentData, uint8_t homParGeno,
 				     const uint64_t childrenData[5]);
     static void makePartialPIStates(dynarray<State> &partialStates,
 				    uint8_t parentData,

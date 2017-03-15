@@ -42,7 +42,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
 
   // build states/phase each marker
   for(int m = firstMarker; m <= lastMarker; m++) {
-    uint8_t parentData, parentGenoTypes, childGenoTypes;
+    uint8_t parentData, parentGenoTypes, homParGeno, childGenoTypes;
     // Each index corresponds to a genotype (see the Geno enumerated type).
     // The two bits corresponding to each child are set to 1 for the index
     // of its genotype.
@@ -56,7 +56,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 1: Determine marker type and check for Mendelian errors
-    int mt = getMarkerType(parentGenoTypes, childGenoTypes);
+    int mt = getMarkerType(parentGenoTypes, childGenoTypes, homParGeno);
     assert(mt > 0 && (mt & ~((1 << MT_N_TYPES) -1) ) == 0);
 
     if (mt & ((1 << MT_ERROR) | (1 << MT_AMBIG))) {
@@ -89,7 +89,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     // Step 2: For each consistent marker type, deduce the inheritance vector
     // bits where possible and generate partial states that only have bits
     // defined for the informative parent(s)
-    makePartialStates(partialStates, mt, parentData, childrenData);
+    makePartialStates(partialStates, mt, parentData, homParGeno, childrenData);
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 3: Using states for the previous informative marker, fill in
@@ -170,7 +170,8 @@ void Phaser::getFamilyData(NuclearFamily *theFam, int marker,
 // Determines what type of marker this is using data for the parents if present
 // or based on the observed genotype values for the the children when one or
 // both parent's data are missing
-int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
+int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
+			  uint8_t &homParGeno) {
   // Only valid values for parentGenoTypes are between 1 and 12 (excluding 7
   // and 11 which are caught below)
   assert(parentGenoTypes >= 1 && parentGenoTypes <= 12);
@@ -218,18 +219,22 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
 	// Mendelian error -- child is homozygous for allele not present in
 	// the homozygous parent
 	return 1 << MT_ERROR;
-      else
+      else {
 	// one parent heterozygous, other homozygous: informative for one parent
+	homParGeno = G_HOM0;
 	return 1 << MT_FI_1;
+      }
       break;
     case ((1 << G_HOM1) | (1 << G_HET)): // one homozygous for 1, other het
       if (childGenoTypes & (1 << G_HOM0))
 	// Mendelian error -- child is homozygous for allele not present in
 	// the homozygous parent
 	return 1 << MT_ERROR;
-      else
+      else {
 	// one parent heterozygous, other homozygous: informative for one parent
+	homParGeno = G_HOM1;
 	return 1 << MT_FI_1;
+      }
       break;
 
     //////////////////////////////////////////////////////////////////////////
@@ -307,12 +312,15 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
       // of the parents that constrains the type:
       switch (missingType) {
 	case G_MISS: // both missing data -- could be any type:
+	  homParGeno = G_HOM0;
 	  return (1 << MT_UN) | (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HET: // one heterozygous parent
 	  // can't be uninformative with one heterozygous parent:
+	  homParGeno = G_HOM0;
 	  return (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HOM0: // one parent homozygous for 0
 	  // can't be partly informative with one homozygous parent:
+	  homParGeno = G_MISS; // not really sure of other parent's genotype
 	  return (1 << MT_UN) | (1 << MT_FI_1);
 	case G_HOM1: // one parent homozygous for 1
 	  // Mendelian error: can't get children that are homozygous for allele
@@ -326,9 +334,11 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
       // of the parents that constrains the type:
       switch (missingType) {
 	case G_MISS: // both missing data -- could be any type:
+	  homParGeno = G_HOM1;
 	  return (1 << MT_UN) | (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HET: // one heterozygous parent
 	  // can't be uninformative with one heterozygous parent:
+	  homParGeno = G_HOM1;
 	  return (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HOM0: // one parent homozygous for 0
 	  // Mendelian error: can't get children that are homozygous for allele
@@ -336,6 +346,7 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
 	  return 1 << MT_ERROR;
 	case G_HOM1: // one parent homozygous for 1
 	  // can't be partly informative with one homozygous parent:
+	  homParGeno = G_MISS; // not really sure of other parent's genotype
 	  return (1 << MT_UN) | (1 << MT_FI_1);
       }
       break;
@@ -345,12 +356,15 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
       // is information on one of the parents that constrains the type:
       switch (missingType) {
 	case G_MISS: // both missing data -- no information to add
+	  homParGeno = G_HOM0;
 	  return (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HET: // one heterozygous parent
 	  // other parent could be either type, so no constraining:
+	  homParGeno = G_HOM0;
 	  return (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HOM0: // one parent homozygous for 0
 	  // can't be partly informative with one homozygous parent:
+	  homParGeno = G_HOM0;
 	  return 1 << MT_FI_1;
 	case G_HOM1: // one parent homozygous for 1
 	  // Mendelian error: can't get children that are homozygous for allele
@@ -364,9 +378,11 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
       // is information on one of the parents that constrains the type:
       switch (missingType) {
 	case G_MISS: // both missing data -- no information to add
+	  homParGeno = G_HOM1;
 	  return (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HET: // one heterozygous parent
 	  // other parent could be either type, so no constraining:
+	  homParGeno = G_HOM1;
 	  return (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HOM0: // one parent homozygous for 0
 	  // Mendelian error: can't get children that are homozygous for allele
@@ -374,6 +390,7 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
 	  return 1 << MT_ERROR;
 	case G_HOM1: // one parent homozygous for 1
 	  // can't be partly informative with one homozygous parent:
+	  homParGeno = G_HOM1;
 	  return 1 << MT_FI_1;
       }
       break;
@@ -390,6 +407,7 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
 	case G_HOM1: // one parent homozygous for 1
 	  // other parent must be heterozygous, so fully informative for that
 	  // parent
+	  homParGeno = missingType;
 	  return 1 << MT_FI_1;
       }
       break;
@@ -411,10 +429,11 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes) {
 // each parent transmitted to the children.
 void Phaser::makePartialStates(dynarray<State> &partialStates,
 			       int markerTypes, uint8_t parentData,
+			       uint8_t homParGeno,
 			       const uint64_t childrenData[5]) {
   // Fully informative for one parent:
   if (markerTypes & (1 << MT_FI_1)) {
-    makePartialFI1States(partialStates, parentData, childrenData);
+    makePartialFI1States(partialStates, parentData, homParGeno, childrenData);
   }
 
   // Partly informative
@@ -427,33 +446,27 @@ void Phaser::makePartialStates(dynarray<State> &partialStates,
 // parent markers (or the states that correspond to this possibility when the
 // parent's genotypes aren't fully known)
 void Phaser::makePartialFI1States(dynarray<State> &partialStates,
-				  uint8_t parentData,
+				  uint8_t parentData, uint8_t homParGeno,
 				  const uint64_t childrenData[5]) {
   uint8_t startPar, endPar;
-  // TODO: getMarkerType() can infer what this genotype must be for missing
-  // data cases. Get it to do so
-  uint8_t homParGeno; // homozygous parent genotype
 
   // If both parents are missing, we'll make states corresponding to each
   // being heterozygous (other homozygous), consistent with the ambiguity
   if (parentData == (G_MISS << 2) + (G_MISS)) {
     startPar = 0;
     endPar = 1;
-    homParGeno = G_MISS;
   }
   // parent 0 het: either we have data for parent 0 as a het, or we have data
   // for parent 1 as homozygous (or both)
   else if ((parentData & 3) == G_HET || (parentData >> 2) == G_HOM0 ||
 	   (parentData >> 2) == G_HOM1) {
     startPar = endPar = 0;
-    homParGeno = parentData >> 2;
   }
   // parent 1 het:
   else {
     assert((parentData >> 2) == G_HET || (parentData & 3) == G_HOM0 ||
 	   (parentData & 3) == G_HOM1);
     startPar = endPar = 1;
-    homParGeno = parentData & 3;
   }
 
   for(uint8_t hetPar = startPar; hetPar <= endPar; hetPar++) {
@@ -467,13 +480,18 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     State &newState = partialStates[newIndex];
 
     // Initially assumes the phase is assigned such that allele 0 is on
-    // haplotype 0 and allele 1 is on haplotype 1. More specifically, the
-    // heterozygous children are assumed to receive haplotype 1 and the
-    // homozygous children haplotype 2
-    // TODO! not simply G_HET: if the homozygous parent is G_HOM1, want to set
-    // those children: het children receive allele 0 from the het parent in that
-    // case.
-    newState.iv = _parBits[hetPar] & childrenData[ G_HET ];
+    // haplotype 0 and allele 1 is on haplotype 1. When the homozygous parent
+    // is homozygous for allele 0, the heterozygous children will have received
+    // haplotype 1 from the heterozygous parent. However, if the homozygous
+    // parent is homozygous for allele 1, the heterozygous children will have
+    // received haplotype 0 from the heterozygous parent, and the homozygous
+    // children received allele 1 from this parent. So:
+    static_assert(G_HOM1 == 3 && G_HOM0 == 0); // assuming this below
+    assert(homParGeno == G_HOM0 || homParGeno == G_HOM1); // TODO: remove later
+    uint8_t homParAll1 = homParGeno & 1; // binary: homozy parent have allele 1?
+    // Which genotype in the children received allele 1 from het parent?
+    uint8_t childAll1Geno = homParAll1 * G_HOM1 + (1 - homParAll1) * G_HET;
+    newState.iv = _parBits[hetPar] & childrenData[ childAll1Geno ];
     // No ambiguous bits (though a missing data child could have ambiguous bits
     // propagated from a previous marker, but that happens during full state
     // construction)
