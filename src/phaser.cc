@@ -405,10 +405,9 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	  return 1 << MT_AMBIG;
 	case G_HOM0: // one parent homozygous for 0
 	case G_HOM1: // one parent homozygous for 1
-	  // other parent must be heterozygous, so fully informative for that
-	  // parent
+	  // other parent either heterozygous or homozygous for other allele
 	  homParGeno = missingType;
-	  return 1 << MT_FI_1;
+	  return (1 << MT_UN) | (1 << MT_FI_1);
       }
       break;
     case (1 << G_MISS): // all children missing data
