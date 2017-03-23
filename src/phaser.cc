@@ -117,7 +117,7 @@ void Phaser::parBitsInit(int numChildren) {
   // alternating bits set starting with bit 0 then bit 2, ...
   uint64_t allBitsSet = ~0ul; // initially: fewer depending on numChildren
   if (numChildren < 32)
-    allBitsSet &= (1 << (2*numChildren)) - 1;
+    allBitsSet &= (1ul << (2*numChildren)) - 1;
   _parBits[0] = 0x5555555555555555 & allBitsSet;
   _parBits[1] = 0xAAAAAAAAAAAAAAAA & allBitsSet;
   _parBits[2] = allBitsSet;
@@ -161,9 +161,9 @@ void Phaser::getFamilyData(NuclearFamily *theFam, int marker,
   int numChildren = children.length();
   for(int c = 0; c < numChildren; c++) {
     uint8_t curChildData = children[c]->getBitGeno(marker);
-    childrenData[ curChildData ] += 3 << (c*2);
-    childrenData[4] += curChildData << (c*2);
-    childGenoTypes |= 1 << curChildData; // observed genotype <curChildData>
+    childrenData[ curChildData ] += 3ul << (c*2);
+    childrenData[4] += ((uint64_t) curChildData) << (c*2);
+    childGenoTypes |= 1ul << curChildData; // observed genotype <curChildData>
   }
 }
 
