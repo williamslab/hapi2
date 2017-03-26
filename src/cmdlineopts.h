@@ -7,7 +7,7 @@
 #ifndef CMDLINEOPTS_H
 #define CMDLINEOPTS_H
 
-#define VERSION_NUMBER	"0.01"
+#define VERSION_NUMBER	"1.9b"
 #define RELEASE_DATE    "NOT"
 
 class CmdLineOpts {
@@ -63,6 +63,10 @@ class CmdLineOpts {
     // Force write of output files?  By default the following is false, and
     // the program quits if any of the output files exist (except the log file)
     static int forceWrite;
+
+    // Introduce an error state at one marker if doing so saves at least this
+    // many recombinations. 0 disables.
+    static int max1MarkerRecomb;
 };
 
 #endif // CMDOPTIONS_H

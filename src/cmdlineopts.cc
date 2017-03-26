@@ -10,6 +10,8 @@
 #include <genetio/marker.h>
 #include "cmdlineopts.h"
 
+#define DEFAULT_NO_ERROR_MAX	2
+
 ////////////////////////////////////////////////////////////////////////////////
 // define/initialize static members
 char *CmdLineOpts::genoFile = NULL;
@@ -25,12 +27,14 @@ char *CmdLineOpts::onlyChr = NULL;
 int   CmdLineOpts::startPos = 0;
 int   CmdLineOpts::endPos = INT_MAX;
 int   CmdLineOpts::forceWrite = 0;
+int   CmdLineOpts::max1MarkerRecomb = DEFAULT_NO_ERROR_MAX;
 
 // Parses the command line options for the program.
 bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
   enum {
     START_POS = CHAR_MAX + 1,
     END_POS,
+    NO_ERROR_MAX,
   };
 
   static struct option const longopts[] =
@@ -45,6 +49,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"chr", required_argument, NULL, 'c'},
     {"start", required_argument, NULL, START_POS},
     {"end", required_argument, NULL, END_POS},
+    {"no_error_max", required_argument, NULL, NO_ERROR_MAX},
     {"impute2", no_argument, &CmdLineOpts::useImpute2Format, 1},
 //    {"vcf_out", no_argument, &CmdLineOpts::vcfOutput, 1},
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
@@ -169,6 +174,15 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	  exit(2);
 	}
 	break;
+      case NO_ERROR_MAX:
+	max1MarkerRecomb = strtol(optarg, &endptr, 10);
+	if (errno != 0 || *endptr != '\0') {
+	  fprintf(stderr, "ERROR: unable to parse no_err_max option\n");
+	  if (errno != 0)
+	    perror("strtol");
+	  exit(2);
+	}
+	break;
 
       case '?':
 	// bad option; getopt_long already printed error message
@@ -271,6 +285,11 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "\n");
   fprintf(out, "  --start <#>\t\tstart position on given chromosome\n");
   fprintf(out, "  --end <#>\t\tend position on given chromosome\n");
+  fprintf(out, "\n");
+  fprintf(out, "  --no_err_max <#>\tMaximum number of recombinations attributable to a\n");
+  fprintf(out, "\t\t\tsingle marker before it is called an error. Default: %d.\n",
+	  DEFAULT_NO_ERROR_MAX);
+  fprintf(out, "\t\t\tSet >=2 to detect single marker non-crossovers\n");
   fprintf(out, "\n");
   fprintf(out, "  --impute2\t\tprint phase results in IMPUTE2 format\n");
   // Note: not currently supporting VCF output

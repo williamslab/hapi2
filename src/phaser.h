@@ -50,6 +50,7 @@ class Phaser {
 	  maxMarkers = Marker::getNumChromMarkers(c);
       _hmm.resize(maxMarkers);
       _hmmMarker.resize(maxMarkers);
+      _genos.resize(maxMarkers);
     }
     static void run(NuclearFamily *theFam, int chrIdx);
 
@@ -76,6 +77,9 @@ class Phaser {
 				    const uint64_t childrenData[5]);
     static void makeFullStates(const dynarray<State> &partialStates, int marker,
 			       const uint64_t childrenData[5]);
+    static void mapPrevToFull(const State *prevState, int32_t prevIdx,
+			      const State &curPartial,
+			      const uint64_t childrenData[5]);
     static void handlePI(const State *prevState, uint64_t &fullIV,
 			 uint64_t &fullAmbig, uint64_t &recombs,
 			 uint64_t parRecombs[2], uint64_t &propagateAmbig,
@@ -104,7 +108,7 @@ class Phaser {
 			     uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
 			     uint8_t hetParent, uint8_t homParentGeno,
 			     uint8_t initParPhase, uint8_t altPhaseType,
-			     uint16_t prevIndex, uint16_t prevMinRecomb,
+			     int32_t prevIndex, uint16_t prevMinRecomb,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig);
     static void backtrace(NuclearFamily *theFam);
@@ -118,6 +122,10 @@ class Phaser {
     static dynarray< dynarray<State*> > _hmm;
     static dynarray<int> _hmmMarker;
     static dynarray<uint16_t> _minStates;
+
+    // Container for parent and children's genotypes. Needed occasionally
+    // during back tracing
+    static dynarray< std::pair<uint8_t,uint64_t> > _genos;
 
     // Hash table (including all the book keeping stuff) to store states
     // to enable fast lookup of states a given previous state maps to
@@ -208,6 +216,9 @@ struct State {
   // for each parent. Bit 0 here indicates (0 or 1) whether to flip parent 0
   // and bit 1 indicates whether to flip parent 1
   uint8_t  parentPhase;   // Note: can fit in 2 bits
+
+  // Error state? Used in the context of <CmdLineOpts::max1MarkerRecomb>
+  uint8_t  error;         // Note: can fit in 1 bit
 };
 
 #endif // PHASER_H
