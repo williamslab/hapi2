@@ -34,7 +34,8 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out) {
     std::list<Recomb>::iterator itr;
     bool informSeen = false;
     uint64_t prevIV = 0;
-    bool allChildrenSolid = false; // confidently know starting haplotypes?
+    // confidently know starting haplotypes for each parent?
+    bool allChildrenSolid[2] = { false, false };
 
     int firstMarker = Marker::getFirstMarkerNum(chrIdx);
     int lastMarker = Marker::getLastMarkerNum(chrIdx);
@@ -125,7 +126,7 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out) {
 
 	    // TODO: use CmdLineOpts here (search for 10 in comments and in
 	    // the .h file)
-	    if (!allChildrenSolid &&
+	    if (!allChildrenSolid[recombParent] &&
 			  _numInformForChild[recombParent][recombChild] < 10) {
 	      // Need at least 10 consecutive markers in agreement about which
 	      // haplotype a child has received before we can call a crossover.
@@ -153,14 +154,21 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out) {
 	int endP = isPI * 1 + (1-isPI) * startP;
 	for(int p = startP; p <= endP; p++) {
 	  _informMarkers[p].append(marker);
-	  if (!allChildrenSolid) {
+	  if (!allChildrenSolid[p]) {
+	    bool haveNonSolid = false; // for updating allChildrenSolid
 	    // increment counts of children's informative 
 	    for(int c = 0; c < numChildren; c++) {
 	      // Note: we reset the count to 0 whenever a child recombines early
-	      // on on the chromosome (i.e., before allChildrenSolid)
-	      if (theFam->_children[c]->getBitGeno(marker) != G_MISS)
+	      // on on the chromosome (i.e., before allChildrenSolid[p])
+	      if (theFam->_children[c]->getBitGeno(marker) != G_MISS) {
 		_numInformForChild[p][c]++;
+		if (_numInformForChild[p][c] < 10)
+		  haveNonSolid = true;
+	      }
+	      else
+		haveNonSolid = true;
 	    }
+	    allChildrenSolid[p] = !haveNonSolid;
 	  }
 	}
 	prevIV = phase.iv;
