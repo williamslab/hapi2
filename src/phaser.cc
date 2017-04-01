@@ -1345,7 +1345,12 @@ void Phaser::backtrace(NuclearFamily *theFam) {
     else
       numRecombs = 0;
 
-    theFam->setPhase(_hmmMarker[curIndex], curState->iv, curState->ambig,
+    // Missing genotype value is 01, not any other, so:
+    uint64_t childrenData = _genos[curIndex].second;
+    uint64_t missing = (childrenData & _parBits[0]) &
+					  ~((childrenData & _parBits[1]) >> 1);
+    theFam->setPhase(_hmmMarker[curIndex], curState->iv,
+		     curState->ambig & _parBits[1], missing,
 		     curState->hetParent, curState->homParentGeno,
 		     curState->parentPhase, numRecombs);
     // TODO: memory leak: bunch of State*s being thrown away here
