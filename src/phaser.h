@@ -76,7 +76,8 @@ class Phaser {
 				    uint8_t parentData,
 				    const uint64_t childrenData[5]);
     static void makeFullStates(const dynarray<State> &partialStates, int marker,
-			       const uint64_t childrenData[5]);
+			       const uint64_t childrenData[5],
+			       NuclearFamily *theFam);
     static void mapPrevToFull(const State *prevState, int32_t prevIdx,
 			      const State &curPartial,
 			      const uint64_t childrenData[5]);

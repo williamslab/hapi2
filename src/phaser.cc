@@ -100,7 +100,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     // Simultaneously calculate the minimum recombination counts for each state
     // and identify which previous state(s) produce that minimum count (i.e.,
     // perform count-based Viterbi calculation)
-    makeFullStates(partialStates, /*marker=*/ m, childrenData);
+    makeFullStates(partialStates, /*marker=*/ m, childrenData, theFam);
 
     // Clean up for next marker
     partialStates.clear();
@@ -179,6 +179,11 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
   // and 11 which are caught below)
   assert(parentGenoTypes >= 1 && parentGenoTypes <= 12);
   assert(childGenoTypes >= 1 && childGenoTypes <= 15);
+
+  if (childGenoTypes == (1 << G_MISS)) {
+    // check no data for all children case first: is ambiguous
+    return 1 << MT_AMBIG;
+  }
 
   // stores the genotype of the non-missing parent if present; if both are
   // missing, stores 1, the value for missing data
@@ -494,7 +499,8 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     // received haplotype 0 from the heterozygous parent, and the homozygous
     // children received allele 1 from this parent. So:
     static_assert(G_HOM1 == 3 && G_HOM0 == 0); // assuming this below
-    assert(homParGeno == G_HOM0 || homParGeno == G_HOM1); // TODO: remove later
+    // Following always holds; commented out to improve efficiency:
+//    assert(homParGeno == G_HOM0 || homParGeno == G_HOM1);
     uint8_t homParAll1 = homParGeno & 1; // binary: homozy parent have allele 1?
     // Which genotype in the children received allele 1 from het parent?
     uint8_t childAll1Geno = homParAll1 * G_HOM1 + (1 - homParAll1) * G_HET;
@@ -556,7 +562,8 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
 // generates all full states. Stores these as the last value in <_hmm> and
 // stores the marker index <marker> that these states apply to in <_hmmMarker>.
 void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
-			    const uint64_t childrenData[5]) {
+			    const uint64_t childrenData[5],
+			    NuclearFamily *theFam) {
   // The new entry in <_hmm> corresponds to <marker>:
   _hmmMarker.append(marker);
 
@@ -567,14 +574,16 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
     int len = partialStates.length();
     assert(len <= 3); // can only have 2 forms of FI partial states and one PI
     for(int i = 0; i < len; i++) {
-      if (i == 1 && partialStates[1].hetParent == 1 &&
-						partialStates[0].hetParent == 0)
-	// TODO: not sure we want this: perhaps if we know there's no parent
-	// data anywhere on the length of the chromosome
+      if (i == 1 && partialStates[1].hetParent == 1
+		 && partialStates[0].hetParent == 0
+		 && !theFam->_parents->first->hasData()
+		 && !theFam->_parents->second->hasData())
 	// For the very first marker, if we're not sure which parent is
-	// heterozygous, arbitrarily pick parent 0 as such. Otherwise, since the
-	// two states are equivalent but with opposite parent labels, there will
-	// be two equal paths through the HMM.
+	// heterozygous, and both are missing data, arbitrarily pick parent
+	// 0 as such. Otherwise, since the two states are equivalent but
+	// with opposite parent labels, there will be two equal paths
+	// through the HMM.
+	// TODO: document this behavior
 	continue;
       State *newState = new State(partialStates[i]);
       newState->minRecomb = 0;
@@ -766,9 +775,9 @@ void Phaser::mapPrevToFull(const State *prevState, int32_t prevIdx,
 		       curPartial.hetParent, stdAmbigOnlyPrev,
 		       ambig1PrevInfo, ambig1Unassigned);
 
-    // TODO: remove later
-    assert((recombs & childrenData[G_HET] & (childPrevUnassigned[0] |
-						 childPrevUnassigned[1])) == 0);
+    // Following is not failing, so comment out for efficiency:
+//    assert((recombs & childrenData[G_HET] & (childPrevUnassigned[0] |
+//						 childPrevUnassigned[1])) == 0);
 
     ///////////////////////////////////////////////////////////////////////////
     // Now ready to look up or create full states with the <fullIV> and
@@ -809,10 +818,10 @@ void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
   // about allelic transmissions from both parents, but switching to the
   // opposite <iv> will only incur one recombination relative to the one parent
   // whose <iv> value has been assigned, not two. So, as distinct from
-  // standard ambiguous <iv> values, there two <iv> values, one of which gives
-  // 0 recombinations relative to the previous markers, the other of which,
-  // despite being inverted for both parents, gives only 1 recombination. We
-  // call these ambig1 and deal with them separately. Note that they are
+  // standard ambiguous <iv> values, there are two <iv> values, one of which
+  // gives 0 recombinations relative to the previous markers, the other of
+  // which, despite being inverted for both parents, gives only 1 recombination.
+  // We call these ambig1 and deal with them separately. Note that they are
   // similar to unambigous <iv> values in that once established (i.e., after
   // the single ambig bit is set) we seek to match the <iv> values to the prior
   // marker while propagating foward the ambig1 status. Thus, in particular,
@@ -874,10 +883,10 @@ void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
   fullIV ^= toRemove;
   recombs &= ~toRemove;
 
-  // TODO: remove later
-  assert(recombs == ((prevState->iv ^ fullIV) & ~prevState->unassigned &
-			~(childrenData[G_HET] &
-			   (childPrevUnassigned[0] | childPrevUnassigned[1]))));
+  // Following is not failing, so comment out for efficiency:
+//  assert(recombs == ((prevState->iv ^ fullIV) & ~prevState->unassigned &
+//			~(childrenData[G_HET] &
+//			   (childPrevUnassigned[0] | childPrevUnassigned[1]))));
 }
 
 // For MT_PI states, determines <unambigHetRecombs>, an array with both bits
@@ -1089,17 +1098,27 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // marker for missing data children so changing the parent's phase at the
   // current marker will modify some children's <iv> values but not the missing
   // data ones).
+  // An exception to (1) occurs at PI states -- if the child both has missing
+  // data and is ambiguous, the IV value will be equivalently ambiguous for
+  // both states. (That's not the case for FI states since the ambiguous values
+  // the are equivalent to one another are flipped for both parents. At FI
+  // states we consider only flipping one parent and so the [fixed] ambig value
+  // will be different relative to the other children that are flipped.)
   // (2) Similarly, there have to be no children that were only ambiguous
   // in the previous state and not here. To avoid recombinations relative to
   // the previous state the previous <iv> value can be flipped. When this
   // happens, the propagated <iv> value differs between the two possible states.
+  // An exception to (2) occurs at PI states -- when a child is homozygous
+  // there's nothing to propagate so the two states will be equivalent for such
+  // children.
   // (3) For PI type states, must have all heterozygous markers be (standard)
   // ambiguous. Otherwise, since flipping will necessitate fixing the
   // unambiguous children to match the previous state (to avoid recombinations
   // from both parents), the resulting state will not be equivalent (akin to
   // missing data children).
-  if (childrenData[G_MISS] == 0 && stdAmbigOnlyPrev == 0 &&
-			    ((1 - isPI) || childrenData[G_HET] == fullAmbig)) {
+  if ( ((1-isPI) && childrenData[G_MISS] == 0 && stdAmbigOnlyPrev == 0) ||
+       (isPI && (stdAmbigOnlyPrev & childrenData[G_HET]) == 0
+	     && (childrenData[G_MISS] | childrenData[G_HET]) == fullAmbig)) {
     numIter = 1;
 
     // Determine which phase assignment has minimal recombinations before the
@@ -1130,6 +1149,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     }
   }
 
+  State *lastState = NULL;
 
   // Examine the 1 or 2 needed phase assignments
   for(int i = 0; i < numIter; i++) {
@@ -1141,6 +1161,11 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // distinguishes between them.
     State *theState = lookupState(fullIV, fullAmbig);
     // TODO: add a check for prevState->minRecomb > theState.minRecomb?
+
+    // Should never map to the same state as the previous iteration (this should
+    // be caught in the code above that sets numIter = 1)
+    assert(lastState == NULL || theState != lastState);
+    lastState = theState;
 
     int totalRecombs = prevMinRecomb + numRecombs;
     if (prevIndex < 0)
@@ -1216,7 +1241,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 // Given <iv> and <ambig>, first convert <iv> to the equivalent canonical value
 // (see comment just inside method) and then do a hash table lookup for the
 // State. If it does not exist, create it. Either way, return it to the caller.
-State * Phaser::lookupState(const uint64_t iv, const uint64_t ambig) {
+State * Phaser::lookupState(const uint64_t iv, const uint64_t ambigReal) {
   // As inheritance vectors have four equivalent values, we have a fixed key
   // defined via the following convention:
   // (1) In the lowest order two bits for which <iv> is unambiguous, the value
@@ -1228,14 +1253,30 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t ambig) {
   //     Likewise 00 can be flipped to 11. So it suffices to only consider only
   //     two ambiguous values: 10 and 00.)
 
-  uint64_t unambig = _parBits[2] - ambig;
+  // Get bits for children that are have an standard ambig value. Those with
+  // ambig1 type values have similarities with unambiguous cases: their phase
+  // is fixed relative to a previous value, and only after there's a
+  // recombination does anything to do with the ambig1 value come in. Perhaps
+  // more importantly, whereas with standard ambiguous values there are two
+  // underlying IV values (two pairs of equivalent IVs 00 == 11 and 01 == 10 for
+  // ambig IVs), the ambig1 type values have the standard four. A final way
+  // to think about this is that missing data children have values propagated
+  // from a previous marker, but states with equivalent IV values as defined
+  // here need not think about the fact that the child is missing data: however
+  // a state gets produced, if it's equivalent to some other state in terms of
+  // IVs, it will produce the same number of recombinations downstream. That's
+  // the case for these ambig1 type values, with the priviso of course that the
+  // ambig1 type ambig bits must be equivalent for the equivalence to hold.
+  uint64_t ambigStd = ((ambigReal & _parBits[1]) >> 1) * 3;
+
+  uint64_t unambig = _parBits[2] - ambigStd;
 
   //////////////////////////////////////////////////////////////////////////
   // Get the canonical key value
 
   // First determine the <iv> value for the lowest order unambiguous child:
   int lowOrderChildBit = ffsll(unambig) - 1;
-  // Markers that have all heterozygous children are ambiguous and not
+  // Markers that have all heterozygous children are totally ambiguous and not
   // considered at this stage, so there must be at least one unambiguous child:
   assert(lowOrderChildBit >= 0);
 
@@ -1247,22 +1288,23 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t ambig) {
   // the values to flip assigned in each child:
   uint64_t lookupIV = iv ^ (_flips[flipType] & unambig);
   // And we've done something analogous for ambiguous bits; must flip them too:
-  lookupIV ^= _ambigFlips[flipType] & ambig;
+  lookupIV ^= _ambigFlips[flipType] & ambigStd;
 
   //////////////////////////////////////////////////////////////////////////
   // Do the lookup
 
-  iv_ambig_real theKey(lookupIV, ambig);
+  iv_ambig_real theKey(lookupIV, ambigReal);
   state_ht_iter it = _stateHash.find( &theKey );
   if (it == _stateHash.end()) {
     // need to create state
     State *newState = new State;
+    newState->ambig = ambigReal;
     newState->minRecomb = UINT16_MAX;
-    iv_ambig newStateKey = new iv_ambig_real(lookupIV, ambig);
+    iv_ambig newStateKey = new iv_ambig_real(lookupIV, ambigReal);
     _stateHash[ newStateKey ] = newState;
     int curHMMIndex = _hmm.length() - 1;
     _hmm[curHMMIndex].append(newState);
-    // caller will assign necessary values
+    // caller will assign other necessary values
     return newState;
   }
   else {
