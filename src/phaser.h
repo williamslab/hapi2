@@ -5,6 +5,7 @@
 #include <genetio/nuclearfamily.h>
 #include <genetio/personbulk.h>
 #include <sparsehash/dense_hash_map>
+#include <sparsehash/dense_hash_set>
 
 #ifndef PHASER_H
 #define PHASER_H
@@ -43,7 +44,13 @@ class Phaser {
     //////////////////////////////////////////////////////////////////
 
     static void init() {
+      // TODO: optimization: set load factors for these next values?
       _stateHash.set_empty_key(NULL);
+      _curIdxSet = new state_idx_set();
+      _prevIdxSet = new state_idx_set();
+      _curIdxSet->set_empty_key(UINT16_MAX);
+      _prevIdxSet->set_empty_key(UINT16_MAX);
+
       int maxMarkers = 0;
       for(int c = 0; c < Marker::getNumChroms(); c++)
 	if (Marker::getNumChromMarkers(c) > maxMarkers)
@@ -51,6 +58,7 @@ class Phaser {
       _hmm.resize(maxMarkers);
       _hmmMarker.resize(maxMarkers);
       _genos.resize(maxMarkers);
+      _ambigPrevLists.resize(maxMarkers);
     }
     static void run(NuclearFamily *theFam, int chrIdx);
 
@@ -110,10 +118,12 @@ class Phaser {
 			     uint8_t hetParent, uint8_t homParentGeno,
 			     uint8_t initParPhase, uint8_t altPhaseType,
 			     int32_t prevIndex, uint16_t prevMinRecomb,
+			     uint8_t prevError, bool hetParentUndefined,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig);
+    static void checkClearErrorFlag(dynarray<State*> &curStates);
     static void backtrace(NuclearFamily *theFam);
-    static void findMinStates(int hmmIndex);
+    static uint16_t findMinStates(dynarray<State*> &theStates);
 
 
     //////////////////////////////////////////////////////////////////
@@ -122,7 +132,7 @@ class Phaser {
 
     static dynarray< dynarray<State*> > _hmm;
     static dynarray<int> _hmmMarker;
-    static dynarray<uint16_t> _minStates;
+    static dynarray< dynarray<uint16_t> > _ambigPrevLists;
 
     // Container for parent and children's genotypes. Needed occasionally
     // during back tracing
@@ -141,13 +151,26 @@ class Phaser {
     };
     struct eqIVAmbig {
       bool operator()(const iv_ambig k1, const iv_ambig k2) const {
-	return k1->first == k2->first && k1->second == k2->second;
+	return k1 == k2 ||
+	  (k1 && k2 && k1->first == k2->first && k1->second == k2->second);
       }
     };
     typedef typename google::dense_hash_map<iv_ambig, State *, hashIVAmbig,
 					    eqIVAmbig> state_ht;
     typedef typename state_ht::const_iterator state_ht_iter;
     static state_ht _stateHash;
+
+    struct eq_uint16 {
+      bool operator()(const uint16_t k1, const uint16_t k2) const {
+	return k1 == k2;
+      }
+    };
+    typedef typename google::dense_hash_set<uint16_t, std::tr1::hash<uint16_t>,
+					    eq_uint16> state_idx_set;
+    typedef typename state_idx_set::const_iterator state_set_iter;
+    // For when there are ambiguous previous states
+    static state_idx_set *_curIdxSet;
+    static state_idx_set *_prevIdxSet;
 
     // Inheritance vector bits corresponding to parent 0 and 1 (indexed).
     // Index 2 corresponds to all inheritance vector bits set to 1.
@@ -200,9 +223,22 @@ struct State {
   // index of previous state that leads to optimal phase here
   // TODO: add checks to ensure the number of states does not grow beyond
   // the capacity here. Could enlarge if needed.
+  // NOTE: if we need more than 2^16 slots for ambiguous previous states,
+  // the following approaches suffice:
+  // (1) have the field <ambigPrev> below represent a factor representing
+  // multiples of 2^16 to add to the base <prevState> value (subtracted by
+  // 1 so that <ambigPrev> == 1 is unshifted), thus expanding the allowable
+  // range up to 2^(16+N-1), where N is the number of bits allotted to
+  // <ambigPrev>
+  // (2) Make this a uint16_t and compress the fields below which can fit
+  // in very little space
+  // (3) During a call to makeFullStates(), keep a list of ambigPrev values
+  // to add to <_ambigPrevList>: some states are only ambiguous briefly and
+  // wind up being unambiguous after examining all possible previous states
   uint16_t prevState;
 
   // Minimum number of recombinations to reach this state
+  // TODO: add checks to ensure we never reach UINT16_MAX?
   uint16_t minRecomb;
 
   // Which parent is heterozygous? Either 0, 1, or 2 for both, which corresponds
@@ -218,8 +254,27 @@ struct State {
   // and bit 1 indicates whether to flip parent 1
   uint8_t  parentPhase;   // Note: can fit in 2 bits
 
+  // TODO: optimization: more efficient to compress the above values instead?
+
+  // Ambiguous parent phase at this marker? There are four possible parent
+  // phase types, and each of the four bits in this value corresponds to one
+  // type. If the corresponding bit is set, the phase type is valid.
+  uint8_t  ambigParPhase : 4;
+
+  // Ambiguous previous state? If non-zero, then <prevState> is an index
+  // into <_ambigPrevLists> that gives a list of all the previous states
+  // that map to this state with a total of <minRecomb>
+  uint8_t  ambigPrev : 1;
+
+  // Ambiguous as to which parent is heterozygous?
+  uint8_t  ambigParHet : 1;
+
   // Error state? Used in the context of <CmdLineOpts::max1MarkerRecomb>
-  uint8_t  error;         // Note: can fit in 1 bit
+  // A value of 1 means <this> is an error state.
+  // A value of 2 means that some previous state leading to this one is an
+  // error state. Tracking whether some state leading to this one is an error
+  // state allows us to prefer non-error state paths when there are ambiguities
+  uint8_t  error : 2;
 };
 
 #endif // PHASER_H

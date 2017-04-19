@@ -10,11 +10,13 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 // initialize static members
-dynarray< dynarray<State*> > Phaser::_hmm;
-dynarray<int>      Phaser::_hmmMarker;
-dynarray<uint16_t> Phaser::_minStates;
+dynarray< dynarray<State*> >    Phaser::_hmm;
+dynarray<int>                   Phaser::_hmmMarker;
+dynarray< dynarray<uint16_t> >  Phaser::_ambigPrevLists;
 dynarray< std::pair<uint8_t,uint64_t> > Phaser::_genos;
-Phaser::state_ht Phaser::_stateHash;
+Phaser::state_ht                Phaser::_stateHash;
+Phaser::state_idx_set           *Phaser::_curIdxSet;
+Phaser::state_idx_set           *Phaser::_prevIdxSet;
 uint64_t Phaser::_parBits[3];
 uint64_t Phaser::_flips[4];
 uint64_t Phaser::_ambigFlips[4];
@@ -38,6 +40,10 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
   _hmm.clear();
   _hmmMarker.clear();
   _genos.clear();
+  for(int i = 0; i < _ambigPrevLists.length(); i++) {
+    _ambigPrevLists[i].clear();
+  }
+  _ambigPrevLists.clear();
 
   parBitsInit(numChildren);
 
@@ -588,6 +594,9 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       State *newState = new State(partialStates[i]);
       newState->minRecomb = 0;
       newState->parentPhase = 0;
+      newState->ambigParPhase = 0;
+      newState->ambigPrev = 0;
+      newState->ambigParHet = 0;
       newState->error = 0;
       _hmm[0].append(newState);
     }
@@ -633,6 +642,12 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   // recombinations and compute the difference between all other states and
   // this state/s. If those states have more recombinations than the numbers of
   // differences between them, remove those states.
+
+  // If all the states have <State::error> == 2, then all paths have an error
+  // in them and this indicator isn't necessary to track. Indeed, doing so will
+  // interfere with decisions about states are equivalent, so we'll clear the
+  // flag in this case
+  checkClearErrorFlag( _hmm[ prevHMMIndex+1 ] );
 }
 
 // Do the work of mapping a previous state to all states at the current as
@@ -688,6 +703,15 @@ void Phaser::mapPrevToFull(const State *prevState, int32_t prevIdx,
   // parent
   uint64_t parRecombs[2] = { (recombs & _parBits[0]) * 3,
 			     ((recombs & _parBits[1]) >> 1) * 3 };
+  // These variables are used to determine whether we need to explore all the
+  // different possible phase types for parents. Typically the answer is yes,
+  // but at the beginning of the chromosome, if an informative marker for one
+  // of the parents hasn't yet been seen, then the two possible phase types for
+  // the first marker that is informative for that parent will not in fact
+  // differ in their numbers of recombinations. To avoid indicating these as
+  // ambiguous, we set these values and check them in updateStates() and below
+  // for PI states.
+  bool hetParentUndefined, oneParentUndefined;
 
   // (2) if curPartial is partly informative, for heterozygous children:
   //     (a) When two recombinations occur relative to the previous marker and
@@ -715,11 +739,23 @@ void Phaser::mapPrevToFull(const State *prevState, int32_t prevIdx,
     handlePI(prevState, fullIV, fullAmbig, recombs, parRecombs, propagateAmbig,
 	     defaultPhaseHasRecomb, childPrevUnassigned, unambigHetRecombs,
 	     childrenData);
+
+    bool parUndefined[2];
+    for (int p = 0; p < 2; p++) {
+      uint64_t parBits = _parBits[p];
+      parUndefined[p] = (prevState->unassigned & parBits) == parBits;
+    }
+    oneParentUndefined = parUndefined[0] || parUndefined[1];
+    hetParentUndefined = false; // not applicable to PI states
   }
   else {
     // Fully informative marker: only ambiguous bits are those where a child
     // was ambiguous in the previous state and missing data at this marker
     fullAmbig = childrenData[G_MISS] & prevState->ambig;
+
+    uint64_t hetParBits = _parBits[curPartial.hetParent];
+    hetParentUndefined = (prevState->unassigned & hetParBits) == hetParBits;
+    oneParentUndefined = false; // not applicable to FI states
   }
 
   // (3) As needed, remove apparent recombinations from <iv> values that were
@@ -751,10 +787,15 @@ void Phaser::mapPrevToFull(const State *prevState, int32_t prevIdx,
 	       prevState->unassigned, stdAmbigOnlyPrev, ambig1PrevInfo,
 	       curPartial.hetParent, curPartial.homParentGeno,
 	       /*initParPhase=default phase=*/ 0, altPhaseType, prevIdx,
-	       prevState->minRecomb, childrenData);
+	       prevState->minRecomb, prevState->error, hetParentUndefined,
+	       childrenData);
 
   // For MT_PI states, have 1 or 2 more states to examine:
-  if (isPI) {
+  // Exception is if one of the parents doesn't have any transmitted haplotypes
+  // defined; in that case, it suffices to consider only the two possible
+  // states defined above, since the transmissions for the unassigned parent
+  // are trivially ambiguous
+  if (isPI && !oneParentUndefined) {
     // Above considered default and state with both parents' phase inverted.
     // Now consider the two states in which each parent alone has inverted
     // phase.
@@ -787,7 +828,8 @@ void Phaser::mapPrevToFull(const State *prevState, int32_t prevIdx,
 		 /*curPartial.hetParent=*/2, /*homParentGeno=*/G_MISS,
 		 /*initParPhase=parent 0 flip=*/1,
 		 /*altPhaseType=parent 1 flip=*/ 2, prevIdx,
-		 prevState->minRecomb, childrenData);
+		 prevState->minRecomb, prevState->error,
+		 /*hetParentUndefined=*/ false, childrenData);
   }
 }
 
@@ -984,6 +1026,8 @@ void Phaser::fixRecombFromAmbig(uint64_t &fullIV, uint64_t &recombs,
   uint64_t ambig1OnlyPrev = parAmbigOnlyPrev[0] - parAmbigOnlyPrev[1];
   uint64_t anyAmbigOnlyPrev = parAmbigOnlyPrev[0];
 
+  // TODO: test optimization: don't call this function if ambigOnlyPrev == 0?
+
   // Get their recombinations specific to each parent:
   uint64_t parRecombsFromAmbig[2];
   for(int p = 0; p < 2; p++)
@@ -1079,6 +1123,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint8_t hetParent, uint8_t homParentGeno,
 			  uint8_t initParPhase, uint8_t altPhaseType,
 			  int32_t prevIndex, uint16_t prevMinRecomb,
+			  uint8_t prevError, bool hetParentUndefined,
 			  const uint64_t childrenData[5]) {
   // How many iterations of the loop? See various comments below.
   int numIter = 2;
@@ -1090,6 +1135,10 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // Note: (hetParent >> 1) == 1 iff hetParent == 2. It is 0 for the other
   //       values.
   uint8_t isPI = hetParent >> 1;
+
+  // Is it possible to swap the phase of this state and obtain the same
+  // number of recombinations from the previous state? Decided below
+  uint8_t ambigLocal = 0;
 
   // First, decide how many iterations of the loop below. If the opposite
   // phase assignment yields an equivalent state, we only need to loop once.
@@ -1116,7 +1165,13 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // unambiguous children to match the previous state (to avoid recombinations
   // from both parents), the resulting state will not be equivalent (akin to
   // missing data children).
-  if ( ((1-isPI) && childrenData[G_MISS] == 0 && stdAmbigOnlyPrev == 0) ||
+  if (hetParentUndefined) {
+    // also when the heterozygous parent wasn't defined in the previous state
+    // we need only consider one possibility. Otherwise the two possibilities
+    // will be trivially ambiguous
+    numIter = 1;
+  }
+  else if ( ((1-isPI) && childrenData[G_MISS] == 0 && stdAmbigOnlyPrev == 0) ||
        (isPI && (stdAmbigOnlyPrev & childrenData[G_HET]) == 0
 	     && (childrenData[G_MISS] | childrenData[G_HET]) == fullAmbig)) {
     numIter = 1;
@@ -1145,7 +1200,9 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       ambig1Unassigned ^= (1 - isPI) * ambig1PrevInfo;
     }
     else if (curCount == numRecombs) {
-      // TODO: ambiguous locally. Indicate in State value.
+      // Either of the two phase types give the same number of recombinations.
+      // Will indicate this in the state below.
+      ambigLocal = 1;
     }
   }
 
@@ -1171,30 +1228,115 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     if (prevIndex < 0)
       totalRecombs += CmdLineOpts::max1MarkerRecomb; // penalty for error states
 
-    if (totalRecombs < theState->minRecomb) {
+    // TODO: document (a) and (b) below, and also the ambiguous case down just
+    //       a little bit
+    // Is the previous state <prevIndex> the new minimally recombinant path to
+    // <theState>? Certainly if it produces fewer recombinations.
+    // Also if it has equal numbers of recombinations and either:
+    // (a) <theState> currently has both parents as heterozygotes, but the
+    //     proposed new state has only one heterozygous parent. This heuristic
+    //     is consistent with the fact that whenever a marker can be
+    //     uninformative, we model it is as such. (Parsimony)
+    //     For (a) to apply, we also require that it not introduce an error
+    //     state when <theState> isn't currently an error
+    // (b) <theState> is either an error state or has an error state in its
+    //     previous state path and the proposed new state has no error in its
+    //     path nor is it an error state.
+    if (totalRecombs < theState->minRecomb ||
+	(totalRecombs == theState->minRecomb &&
+	 ((theState->hetParent == 2 && hetParent < 2 &&
+	   ((prevError == 0 && prevIndex >= 0) || theState->error)) || // (a)
+	  (theState->error > 0 && prevError == 0 && prevIndex >= 0)))) { // (b)
       theState->iv = fullIV;
-      theState->ambig = fullAmbig;
+//      theState->ambig = fullAmbig; // already set in lookupState()
       theState->unassigned = fullUnassigned | ambig1Unassigned;
       theState->minRecomb = totalRecombs;
       theState->hetParent = hetParent;
       theState->homParentGeno = homParentGeno;
       theState->parentPhase = curParPhase;
+      theState->ambigParPhase = ambigLocal * (1 << altPhaseType);
+      theState->ambigPrev = 0;
+      theState->ambigParHet = 0;
       if (prevIndex >= 0) {
 	theState->prevState = prevIndex;
-	theState->error = 0;
+	// Propagate error state information: if the path of states leading to
+	// this one has an error in it, indicate this by having
+	// <theState->error> == 2. So we'll copy forward the value of previous
+	// value of 2 or convert a previous value of 1 into 2:
+	// The following produces 0 if prevError == 0 and 2 otherwise:
+	theState->error = (prevError & 2) | ((prevError & 1) << 1);
       }
       else { // erroneous previous state
 	theState->prevState = -(prevIndex + 1);
 	theState->error = 1;
       }
     }
-    else if (totalRecombs == theState->minRecomb) {
-      // TODO: ambiguous for previous state; need way to represent
-      // NOTE: ambiguous error is possible too
-      // TODO: use the State::error field to store 1 more bit indicating whether
-      // the previous state passes through an error state. When there are equal
-      // numbers of recombinations from two previous states, prefer states that
-      // do not pass through error states.
+    // Is the proposed state ambiguous with the current minimum?
+    // Requires that they produce equal numbers of recombinations and:
+    // (a) They have the same assignment for which parent(s) are het or
+    //     they're both heterozygous for only one parent AND
+    // (b) Either the new state is not an error or both it and <theState> are
+    //     marked as errors. Ensure that they are the same types of errors as
+    //     well: the state is either a brand new error for all previous paths
+    //     leading to it or has an error somewhere in its previous path.
+    //     Ideally would like to do something slightly more elaborate than this
+    //     as this will arbitrarily pick the location of the error state with
+    //     no indication about the ambiguity.
+    //     The effect of (b) is to prefer paths without errors in the case of
+    //     ambiguities.
+    else if (totalRecombs == theState->minRecomb &&
+	     (theState->hetParent == hetParent || hetParent < 2) &&
+	     (prevIndex >= 0 || (theState->error & 1)) &&
+	     (prevError == 0 || (theState->error & 2))) {
+      // ambiguous: could get here from >1 previous state:
+      // Note: the order of adding error states in makeFullStates() is such
+      //       that you can't have <theState->error> set and prevIndex not
+      //       also be an error.
+      theState->ambigParPhase |= ambigLocal *
+				    ((1 << curParPhase) | (1 << altPhaseType));
+
+      // Have an ambiguous previous state -- add to list if one exists or
+      // create one
+      uint16_t prevState = (prevIndex >= 0) ? prevIndex : -(prevIndex + 1);
+      if (theState->ambigPrev) {
+	// Already have a slot in <_ambigPrevLists>, so simply append to that.
+	// Can happen that <prevState> is already in the list; check whether
+	// that's the case (will necessarily be the last element since we
+	// consider prevStates sequentially in makeFullStates())
+	int lastElement = _ambigPrevLists[ theState->prevState ].length() - 1;
+	if (_ambigPrevLists[ theState->prevState ][lastElement] != prevState)
+	  _ambigPrevLists[ theState->prevState ].append(prevState);
+	else
+	  theState->ambigParPhase |= 1 << curParPhase;
+      }
+      else {
+	if (theState->prevState == prevState)
+	  theState->ambigParPhase |= 1 << curParPhase;
+	else {
+	  theState->ambigPrev = 1;
+	  // Get a slot in <_ambigPrevLists> to store list of previous states.
+	  // As documented in phaser.h (at the <State::ambigPrev> field),
+	  // <theState->prevState> is an index into <_ambigPrevList> when
+	  // <theState->ambigPrev = 1;
+	  assert(_ambigPrevLists.length() <= UINT16_MAX);
+	  uint16_t curPrev = theState->prevState;
+	  theState->prevState = _ambigPrevLists.length();
+	  _ambigPrevLists.addEmpty();
+	  _ambigPrevLists[ theState->prevState ].append(curPrev);
+	  _ambigPrevLists[ theState->prevState ].append(prevState);
+	}
+      }
+
+      // ambiguous for which parent is heterozygous?
+      theState->ambigParHet = theState->hetParent ^ hetParent;
+
+      // Sanity checks:
+      assert(theState->parentPhase == curParPhase ||
+				(theState->ambigParPhase | (1 << curParPhase)));
+      assert(hetParent == 2 || theState->homParentGeno == homParentGeno);
+
+      // TODO: must use unassigned to distinguish states
+//      assert(theState->unassigned == (fullUnassigned | ambig1Unassigned));
     }
 
     if (i == 0 && numIter == 2) {
@@ -1312,25 +1454,99 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t ambigReal) {
   }
 }
 
+// See comment in caller -- makeFullStates()
+void Phaser::checkClearErrorFlag(dynarray<State*> &curStates) {
+  for(int i = 0; i < curStates.length(); i++) {
+    if (curStates[i]->error != 2) {
+      // at least one state is either an error state (newly erroneous) or
+      // is not an error at all: can't clear error flag
+      return;
+    }
+  }
+
+  // All states have an error status of 2, can set them all to 0: there's no
+  // difference between them
+  for(int i = 0; i < curStates.length(); i++) {
+    curStates[i]->error = 0;
+  }
+}
+
+// TODO: go through and comment this and possibly refactor.
 // Back traces and minimum recombinant phase using the states in <_hmm>.
 void Phaser::backtrace(NuclearFamily *theFam) {
   int lastIndex = _hmm.length() - 1;
 
-  // Find the state with minimum recombinations:
-  findMinStates(lastIndex);
-
-  // TODO: this ignores ambiguities at last index
-  State *curState = _hmm[lastIndex][ _minStates[0] ];
-  State *prevState = NULL;
+  uint16_t curStateIdx = findMinStates(_hmm[lastIndex]);
+  uint16_t prevStateIdx = UINT16_MAX;
   // Number of recombinations in <curState> relative to <prevState> below
-  uint8_t numRecombs;
+  uint8_t numRecombs; // TODO: optimization: do we want this?
   for(int hmmIndex = lastIndex; hmmIndex >= 0; hmmIndex--) {
-    int curIndex = hmmIndex;
+    int curHmmIndex = hmmIndex; // not redundant: errors modify hmmIndex
+    State *curState = _hmm[curHmmIndex][curStateIdx];
+
+    // Analogous to <State::ambigParPhase> -- bits 0-3 indicate which parental
+    // phase values can produce minimum recombinations.
+    // We assign this based on the states indicated in <curIdxSet>
+    uint8_t curAmbigParPhase = curState->ambigParPhase;
+    uint8_t curAmbigParHet = curState->ambigParHet;
+
+    // Find all the possible parent phase types that are have equal and minimal
+    // numbers of recombinations at this marker and append their previous states
+    // to <_prevIdxSet>.
+    for(state_set_iter it = _curIdxSet->begin(); it != _curIdxSet->end(); it++){
+      uint16_t stateIdx = *it;
+      if (stateIdx == curStateIdx)
+	// don't treat the same state as <curState> as ambiguous
+	continue;
+
+      State *ambigState = _hmm[curHmmIndex][stateIdx];
+
+      // The following results in <hetParDiff> == 1 when the two values
+      // differ. Note that if one is 0 and the other is 2, the differing
+      // bit will be the second one, so we shift in the second line:
+      uint8_t hetParDiff = curState->hetParent ^ ambigState->hetParent;
+      hetParDiff = (hetParDiff & 0) | (hetParDiff >> 1);
+      curAmbigParHet |= hetParDiff;
+
+      // only track differences in parent phase assignments if <hetParDiff> == 0
+      // otherwise the values of the parent phase assignments are not comparable
+      curAmbigParPhase |= (1 - hetParDiff) *
+		   ((1 << ambigState->parentPhase) | ambigState->ambigParPhase);
+
+      // Add the previous state index(es) to <_prevIdxSet> so long as the
+      // ambiguous state has the same error status as the current state.
+      // They are allowed in fact to have different error statuses (i.e., 0 and
+      // 2) so long as one of them isn't 1: if one has a value of 1 and the
+      // other doesn't, the previous state indexes they each reference are to
+      // different markers.
+      if (ambigState->error != curState->error &&
+	  ((curState->error & 1) || (ambigState->error & 1)))
+	// error values reference two markers previous not one
+	// TODO: want to find a way to allow this? I think we just need one more
+	//       set storing the ambiguous state indexes two back
+	continue;
+
+      if (!ambigState->ambigPrev)
+	_prevIdxSet->insert( ambigState->prevState ); // only one
+      else {
+	// multiple equivalent previous states: add them all
+	dynarray<uint16_t> &prevIdxs = _ambigPrevLists[ambigState->prevState];
+	for(int i = 0; i < prevIdxs.length(); i++)
+	  _prevIdxSet->insert( prevIdxs[i] );
+      }
+    }
+
+    // Remove any ambig par phase types that have equivalent phase to <curState>
+    // Sometimes states differ in the IV values the propagate forward from the
+    // previous markers, and the true ambiguity lies in those earlier markers
+    curAmbigParPhase &= ~(1 << curState->parentPhase);
 
     // In the previous state, resolve ambiguous <iv> values and propagate
     // backward any <iv> values that were unassigned in that state
     if (hmmIndex - 1 >= 0) {
-      if (curState->error) {
+      // Note: curState->error == 2 means the path has an error in it. We only
+      // need deal with curState->error == 1:
+      if (curState->error & 1) {
 	// Set error for immediately previous marker.
 	theFam->setStatus(/*marker=*/ _hmmMarker[hmmIndex-1], PHASE_ERR_RECOMB,
 			  _genos[hmmIndex-1].first, _genos[hmmIndex-1].second);
@@ -1338,7 +1554,19 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 	_hmm[hmmIndex-1].clear(); // TODO: memory leak
 	hmmIndex--;
       }
-      prevState = _hmm[hmmIndex-1][ curState->prevState ];
+
+      if (!curState->ambigPrev)
+	// only one previous state
+	prevStateIdx = curState->prevState;
+      else {
+	// multiple previous states: add all but the first to <_prevIdxSet>
+	// the first will be the new previous state
+	dynarray<uint16_t> &prevIdxs = _ambigPrevLists[ curState->prevState ];
+	prevStateIdx = prevIdxs[0];
+	for(int i = 1; i < prevIdxs.length(); i++)
+	  _prevIdxSet->insert( prevIdxs[i] );
+      }
+      State *prevState = _hmm[hmmIndex-1][ prevStateIdx ];
 
       // First propagate backward any <iv> values that were unassigned
       // previously
@@ -1382,42 +1610,57 @@ void Phaser::backtrace(NuclearFamily *theFam) {
       // This 1 recombination occurs earlier at the establishment of the ambig1
       // <iv> value.
       numRecombs = curState->minRecomb - prevState->minRecomb -
-			  curState->error * CmdLineOpts::max1MarkerRecomb;
+			  (curState->error & 1) * CmdLineOpts::max1MarkerRecomb;
     }
     else
       numRecombs = 0;
 
     // Missing genotype value is 01, not any other, so:
-    uint64_t childrenData = _genos[curIndex].second;
+    uint8_t parentData = _genos[curHmmIndex].first;
+    uint8_t parMissing = (parentData & 5) & ~((parentData & 10) >> 1);
+    uint64_t childrenData = _genos[curHmmIndex].second;
     uint64_t missing = (childrenData & _parBits[0]) &
 					  ~((childrenData & _parBits[1]) >> 1);
-    theFam->setPhase(_hmmMarker[curIndex], curState->iv,
-		     curState->ambig & _parBits[1], missing,
+    theFam->setPhase(_hmmMarker[curHmmIndex], curState->iv,
+		     curState->ambig & _parBits[1], missing, parMissing,
 		     curState->hetParent, curState->homParentGeno,
-		     curState->parentPhase, numRecombs);
+		     curState->parentPhase, numRecombs, curAmbigParHet,
+		     curAmbigParPhase);
     // TODO: memory leak: bunch of State*s being thrown away here
-    _hmm[curIndex].clear();
+    _hmm[curHmmIndex].clear();
 
-    // ready for next iteration
-    curState = prevState;
+    // ready for next iteration -- make prev into cur for states and state sets
+    curStateIdx = prevStateIdx;
+    state_idx_set *tmp = _curIdxSet;
+    _curIdxSet = _prevIdxSet;
+    _prevIdxSet = tmp;
+    _prevIdxSet->clear();
   }
 }
 
-// Given an index <hmmIndex> into <_hmm>, does a linear search to find the
-// states with minimum numbers of recombinations. Stores these in <_minStates>.
-void Phaser::findMinStates(int hmmIndex) {
+// Given a list of states, does a linear search to find the states with minimum
+// numbers of recombinations. Returns the index of the first state encountered
+// that is minimal and stores any other states that are tied for minimum in
+// <_curIdxSet>.
+uint16_t Phaser::findMinStates(dynarray<State*> &theStates) {
   uint16_t minLastMarker = UINT16_MAX;
+  // The state we will designate as the minimum even as there may ambiguity
+  // stored in <_stateIdxSet>
+  uint16_t minStateIdx = UINT16_MAX;
 
-  int numStates = _hmm[hmmIndex].length();
+  int numStates = theStates.length();
   for(int i = 0; i < numStates; i++) {
-    uint16_t curRecomb = _hmm[hmmIndex][i]->minRecomb;
+    uint16_t curRecomb = theStates[i]->minRecomb;
     if (curRecomb < minLastMarker) {
+      // new minimum: clear any that were equivalent to the previous minimum
+      _curIdxSet->clear();
       minLastMarker = curRecomb;
-      _minStates.clear();
-      _minStates.append(i);
+      minStateIdx = i;
     }
     else if (curRecomb == minLastMarker) {
-      _minStates.append(i);
+      _curIdxSet->insert(i);
     }
   }
+
+  return minStateIdx;
 }
