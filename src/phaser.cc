@@ -36,7 +36,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     exit(9);
   }
 
-  // TODO: I think the clear() calls are not necessary
+  // Ready storage containers to analyze this chromosome
   _hmm.clear();
   _hmmMarker.clear();
   _genos.clear();
@@ -44,7 +44,6 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     _ambigPrevLists[i].clear();
   }
   _ambigPrevLists.clear();
-
   parBitsInit(numChildren);
 
   dynarray<State> partialStates;
@@ -643,6 +642,9 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   // this state/s. If those states have more recombinations than the numbers of
   // differences between them, remove those states.
 
+  // TODO: may be able to avoid running this if we know we didn't introduce
+  // any errors this time and we cleared the errors before
+  //
   // If all the states have <State::error> == 2, then all paths have an error
   // in them and this indicator isn't necessary to track. Indeed, doing so will
   // interfere with decisions about states are equivalent, so we'll clear the
@@ -1171,7 +1173,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // will be trivially ambiguous
     numIter = 1;
   }
-  else if ( ((1-isPI) && childrenData[G_MISS] == 0 && stdAmbigOnlyPrev == 0) ||
+  else if ( ((1-isPI) && childrenData[G_MISS] == 0 && stdAmbigOnlyPrev == 0 &&
+						      ambig1Unassigned == 0) ||
        (isPI && (stdAmbigOnlyPrev & childrenData[G_HET]) == 0
 	     && (childrenData[G_MISS] | childrenData[G_HET]) == fullAmbig)) {
     numIter = 1;
@@ -1197,7 +1200,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       numRecombs = curCount;
       curParPhase = altPhaseType;
       fullIV ^= _parBits[ hetParent ] & ~fullAmbig;
-      ambig1Unassigned ^= (1 - isPI) * ambig1PrevInfo;
+      // No need to excute this as we ensure that (1-isPI) * ambig1PrevInfo == 0
+//      ambig1Unassigned ^= (1 - isPI) * ambig1PrevInfo;
     }
     else if (curCount == numRecombs) {
       // Either of the two phase types give the same number of recombinations.
@@ -1212,11 +1216,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   for(int i = 0; i < numIter; i++) {
     // First look up or create a full state with equivalent <iv> and <ambig>
     // values to <fullIV> and <fullAmbig>
-    // TODO: what about using <unassigned> to distinguish values? Only
-    // relevant near the beginning of a chromosome, but complex given that
-    // some markers might be either FI or PI: that value effectively
-    // distinguishes between them.
-    State *theState = lookupState(fullIV, fullAmbig);
+    State *theState = lookupState(fullIV, fullAmbig,
+				  fullUnassigned | ambig1Unassigned);
     // TODO: add a check for prevState->minRecomb > theState.minRecomb?
 
     // Should never map to the same state as the previous iteration (this should
@@ -1248,8 +1249,9 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 	   ((prevError == 0 && prevIndex >= 0) || theState->error)) || // (a)
 	  (theState->error > 0 && prevError == 0 && prevIndex >= 0)))) { // (b)
       theState->iv = fullIV;
-//      theState->ambig = fullAmbig; // already set in lookupState()
-      theState->unassigned = fullUnassigned | ambig1Unassigned;
+      // next two already assigned in lookupState():
+//      theState->ambig = fullAmbig;
+//      theState->unassigned = fullUnassigned | ambig1Unassigned;
       theState->minRecomb = totalRecombs;
       theState->hetParent = hetParent;
       theState->homParentGeno = homParentGeno;
@@ -1334,9 +1336,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       assert(theState->parentPhase == curParPhase ||
 				(theState->ambigParPhase | (1 << curParPhase)));
       assert(hetParent == 2 || theState->homParentGeno == homParentGeno);
-
-      // TODO: must use unassigned to distinguish states
-//      assert(theState->unassigned == (fullUnassigned | ambig1Unassigned));
+      assert(theState->unassigned == (fullUnassigned | ambig1Unassigned));
     }
 
     if (i == 0 && numIter == 2) {
@@ -1383,7 +1383,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 // Given <iv> and <ambig>, first convert <iv> to the equivalent canonical value
 // (see comment just inside method) and then do a hash table lookup for the
 // State. If it does not exist, create it. Either way, return it to the caller.
-State * Phaser::lookupState(const uint64_t iv, const uint64_t ambigReal) {
+State * Phaser::lookupState(const uint64_t iv, const uint64_t allAmbig,
+			    const uint64_t unassigned) {
   // As inheritance vectors have four equivalent values, we have a fixed key
   // defined via the following convention:
   // (1) In the lowest order two bits for which <iv> is unambiguous, the value
@@ -1409,7 +1410,7 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t ambigReal) {
   // IVs, it will produce the same number of recombinations downstream. That's
   // the case for these ambig1 type values, with the priviso of course that the
   // ambig1 type ambig bits must be equivalent for the equivalence to hold.
-  uint64_t ambigStd = ((ambigReal & _parBits[1]) >> 1) * 3;
+  uint64_t ambigStd = ((allAmbig & _parBits[1]) >> 1) * 3;
 
   uint64_t unambig = _parBits[2] - ambigStd;
 
@@ -1435,14 +1436,15 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t ambigReal) {
   //////////////////////////////////////////////////////////////////////////
   // Do the lookup
 
-  iv_ambig_real theKey(lookupIV, ambigReal);
+  iv_ambig_real theKey(lookupIV, allAmbig, unassigned);
   state_ht_iter it = _stateHash.find( &theKey );
   if (it == _stateHash.end()) {
     // need to create state
     State *newState = new State;
-    newState->ambig = ambigReal;
+    newState->ambig = allAmbig;
+    newState->unassigned = unassigned;
     newState->minRecomb = UINT16_MAX;
-    iv_ambig newStateKey = new iv_ambig_real(lookupIV, ambigReal);
+    iv_ambig newStateKey = new iv_ambig_real(lookupIV, allAmbig, unassigned);
     _stateHash[ newStateKey ] = newState;
     int curHMMIndex = _hmm.length() - 1;
     _hmm[curHMMIndex].append(newState);
@@ -1551,7 +1553,7 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 	theFam->setStatus(/*marker=*/ _hmmMarker[hmmIndex-1], PHASE_ERR_RECOMB,
 			  _genos[hmmIndex-1].first, _genos[hmmIndex-1].second);
 	// <curState->prevState> references a state two indexes back
-	_hmm[hmmIndex-1].clear(); // TODO: memory leak
+	deleteStates(_hmm[hmmIndex-1]);
 	hmmIndex--;
       }
 
@@ -1626,8 +1628,7 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 		     curState->hetParent, curState->homParentGeno,
 		     curState->parentPhase, numRecombs, curAmbigParHet,
 		     curAmbigParPhase);
-    // TODO: memory leak: bunch of State*s being thrown away here
-    _hmm[curHmmIndex].clear();
+    deleteStates(_hmm[curHmmIndex]);
 
     // ready for next iteration -- make prev into cur for states and state sets
     curStateIdx = prevStateIdx;
@@ -1663,4 +1664,13 @@ uint16_t Phaser::findMinStates(dynarray<State*> &theStates) {
   }
 
   return minStateIdx;
+}
+
+// Free/delete the states stored in <theStates> and clear it
+void Phaser::deleteStates(dynarray<State*> &theStates) {
+  int numStates = theStates.length();
+  for(int i = 0; i < numStates; i++) {
+    delete theStates[i];
+  }
+  theStates.clear();
 }

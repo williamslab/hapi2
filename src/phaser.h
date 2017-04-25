@@ -120,10 +120,12 @@ class Phaser {
 			     int32_t prevIndex, uint16_t prevMinRecomb,
 			     uint8_t prevError, bool hetParentUndefined,
 			     const uint64_t childrenData[5]);
-    static State * lookupState(const uint64_t iv, const uint64_t ambig);
+    static State * lookupState(const uint64_t iv, const uint64_t ambig,
+			       const uint64_t unassigned);
     static void checkClearErrorFlag(dynarray<State*> &curStates);
     static void backtrace(NuclearFamily *theFam);
     static uint16_t findMinStates(dynarray<State*> &theStates);
+    static void deleteStates(dynarray<State*> &theStates);
 
 
     //////////////////////////////////////////////////////////////////
@@ -140,19 +142,28 @@ class Phaser {
 
     // Hash table (including all the book keeping stuff) to store states
     // to enable fast lookup of states a given previous state maps to
-    typedef typename std::pair<uint64_t,uint64_t>* iv_ambig;
-    typedef typename std::pair<uint64_t,uint64_t> iv_ambig_real;
+    typedef typename std::tuple<uint64_t,uint64_t,uint64_t>* iv_ambig;
+    typedef typename std::tuple<uint64_t,uint64_t,uint64_t> iv_ambig_real;
     struct hashIVAmbig {
       size_t operator()(iv_ambig const key) const {
 	// make a better hash function?
-	return std::tr1::hash<uint64_t>{}(key->first) +
-	       std::tr1::hash<uint64_t>{}(key->second);
+	return std::tr1::hash<uint64_t>{}(std::get<0>(*key)) +
+	       std::tr1::hash<uint64_t>{}(std::get<1>(*key)) +
+	       // unassigned bits aren't expected to be anything but 0 for most
+	       // values so won't distinguish them.
+	       // When they are non-zero, we also expect the other two values
+	       // to distinguish the state and that it will only rarely be the
+	       // case that a state with equivalent IV and ambig values will
+	       // have differing unassigned bits.
+	       std::get<2>(*key);
       }
     };
     struct eqIVAmbig {
       bool operator()(const iv_ambig k1, const iv_ambig k2) const {
 	return k1 == k2 ||
-	  (k1 && k2 && k1->first == k2->first && k1->second == k2->second);
+	  (k1 && k2 && std::get<0>(*k1) == std::get<0>(*k2) &&
+		       std::get<1>(*k1) == std::get<1>(*k2) &&
+		       std::get<2>(*k1) == std::get<2>(*k2));
       }
     };
     typedef typename google::dense_hash_map<iv_ambig, State *, hashIVAmbig,
