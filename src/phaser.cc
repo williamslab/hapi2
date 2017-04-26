@@ -1507,7 +1507,7 @@ void Phaser::backtrace(NuclearFamily *theFam) {
       // differ. Note that if one is 0 and the other is 2, the differing
       // bit will be the second one, so we shift in the second line:
       uint8_t hetParDiff = curState->hetParent ^ ambigState->hetParent;
-      hetParDiff = (hetParDiff & 0) | (hetParDiff >> 1);
+      hetParDiff = (hetParDiff & 1) | (hetParDiff >> 1);
       curAmbigParHet |= hetParDiff;
 
       // only track differences in parent phase assignments if <hetParDiff> == 0
