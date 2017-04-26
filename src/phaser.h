@@ -48,8 +48,8 @@ class Phaser {
       _stateHash.set_empty_key(NULL);
       _curIdxSet = new state_idx_set();
       _prevIdxSet = new state_idx_set();
-      _curIdxSet->set_empty_key(UINT16_MAX);
-      _prevIdxSet->set_empty_key(UINT16_MAX);
+      _curIdxSet->set_empty_key(UINT32_MAX);
+      _prevIdxSet->set_empty_key(UINT32_MAX);
 
       int maxMarkers = 0;
       for(int c = 0; c < Marker::getNumChroms(); c++)
@@ -86,7 +86,7 @@ class Phaser {
     static void makeFullStates(const dynarray<State> &partialStates, int marker,
 			       const uint64_t childrenData[5],
 			       NuclearFamily *theFam);
-    static void mapPrevToFull(const State *prevState, int32_t prevIdx,
+    static void mapPrevToFull(const State *prevState, int64_t prevIdx,
 			      const State &curPartial,
 			      const uint64_t childrenData[5]);
     static void handlePI(const State *prevState, uint64_t &fullIV,
@@ -117,15 +117,17 @@ class Phaser {
 			     uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
 			     uint8_t hetParent, uint8_t homParentGeno,
 			     uint8_t initParPhase, uint8_t altPhaseType,
-			     int32_t prevIndex, uint16_t prevMinRecomb,
-			     uint8_t prevError, bool hetParentUndefined,
+			     int64_t prevIndex, uint16_t prevMinRecomb,
+			     uint8_t prevError, uint8_t onlyPIstatesPrev,
+			     bool hetParentUndefined,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
 			       const uint64_t unassigned);
     static void checkClearErrorFlag(dynarray<State*> &curStates);
     static void backtrace(NuclearFamily *theFam);
-    static uint16_t findMinStates(dynarray<State*> &theStates);
+    static uint32_t findMinStates(dynarray<State*> &theStates);
     static void deleteStates(dynarray<State*> &theStates);
+    static uint32_t collectAmbigPrevIdxs(State *fromState, bool insertFirst);
 
 
     //////////////////////////////////////////////////////////////////
@@ -134,7 +136,7 @@ class Phaser {
 
     static dynarray< dynarray<State*> > _hmm;
     static dynarray<int> _hmmMarker;
-    static dynarray< dynarray<uint16_t> > _ambigPrevLists;
+    static dynarray< dynarray<uint32_t> > _ambigPrevLists;
 
     // Container for parent and children's genotypes. Needed occasionally
     // during back tracing
@@ -171,13 +173,13 @@ class Phaser {
     typedef typename state_ht::const_iterator state_ht_iter;
     static state_ht _stateHash;
 
-    struct eq_uint16 {
-      bool operator()(const uint16_t k1, const uint16_t k2) const {
+    struct eq_uint32 {
+      bool operator()(const uint32_t k1, const uint32_t k2) const {
 	return k1 == k2;
       }
     };
-    typedef typename google::dense_hash_set<uint16_t, std::tr1::hash<uint16_t>,
-					    eq_uint16> state_idx_set;
+    typedef typename google::dense_hash_set<uint32_t, std::tr1::hash<uint32_t>,
+					    eq_uint32> state_idx_set;
     typedef typename state_idx_set::const_iterator state_set_iter;
     // For when there are ambiguous previous states
     static state_idx_set *_curIdxSet;
@@ -232,53 +234,57 @@ struct State {
   uint64_t unassigned; // iv bits that haven't been assigned up to this marker
 
   // index of previous state that leads to optimal phase here
+  // See comment above <ambigPrev> below for the meaning of this value when
+  // the previous state is ambiguous.
   // TODO: add checks to ensure the number of states does not grow beyond
-  // the capacity here. Could enlarge if needed.
-  // NOTE: if we need more than 2^16 slots for ambiguous previous states,
-  // the following approaches suffice:
-  // (1) have the field <ambigPrev> below represent a factor representing
-  // multiples of 2^16 to add to the base <prevState> value (subtracted by
-  // 1 so that <ambigPrev> == 1 is unshifted), thus expanding the allowable
-  // range up to 2^(16+N-1), where N is the number of bits allotted to
-  // <ambigPrev>
-  // (2) Make this a uint16_t and compress the fields below which can fit
-  // in very little space
-  // (3) During a call to makeFullStates(), keep a list of ambigPrev values
-  // to add to <_ambigPrevList>: some states are only ambiguous briefly and
-  // wind up being unambiguous after examining all possible previous states
-  uint16_t prevState;
+  // the capacity here? Unlikely to be more than 2^32 states but could check
+  uint32_t prevState;
 
   // Minimum number of recombinations to reach this state
   // TODO: add checks to ensure we never reach UINT16_MAX?
   uint16_t minRecomb;
 
+  // TODO: optimization: any faster to use full uint8_t values?
+
   // Which parent is heterozygous? Either 0, 1, or 2 for both, which corresponds
   // to MT_PI states
-  uint8_t  hetParent;     // Note: can fit in 2 bits
+  uint8_t  hetParent : 2;
 
   // Genotype of homozygous parent (may be missing)
-  uint8_t  homParentGeno; // Note: can fit in 2 bits
+  uint8_t  homParentGeno : 2;
 
   // Four possible phase types for the parents: default heterozygous assignment
   // has allele 0 on haplotype 0 and allele 1 on haplotype 1. Can flip this
   // for each parent. Bit 0 here indicates (0 or 1) whether to flip parent 0
   // and bit 1 indicates whether to flip parent 1
-  uint8_t  parentPhase;   // Note: can fit in 2 bits
+  uint8_t  parentPhase : 2;
 
-  // TODO: optimization: more efficient to compress the above values instead?
+  // When neither parent has data, at the beginning of a chromosome, initial PI
+  // markers in fact do not distinguish between the parents. So that the entire
+  // chromosome isn't marked ambiguous, this field is present and if set to 1,
+  // it indicates that the previous states are all PI states. The code in this
+  // case arbitrarily does not allow transitions from such states to states with
+  // parent 1 being heterozygous. This arbitrarily sets parent 0 as heterozygous
+  // at the first FI state and avoids the (already implicit and to be
+  // documented) ambiguity
+  uint8_t  onlyPIstatesPrev : 1;
 
   // Ambiguous parent phase at this marker? There are four possible parent
   // phase types, and each of the four bits in this value corresponds to one
   // type. If the corresponding bit is set, the phase type is valid.
   uint8_t  ambigParPhase : 4;
 
-  // Ambiguous previous state? If non-zero, then <prevState> is an index
-  // into <_ambigPrevLists> that gives a list of all the previous states
-  // that map to this state with a total of <minRecomb>
-  uint8_t  ambigPrev : 1;
-
   // Ambiguous as to which parent is heterozygous?
   uint8_t  ambigParHet : 1;
+
+  // Ambiguous previous state? If this value is 1, then <prevState> stores
+  // in every 6 bits starting from the lowest order bits, the indexes to
+  // the ambiguous previous states.
+  // This value is 2 whenever there are more than 32 / 6 == 5 ambiguous
+  // previous states or if the index of any previous states is >=2^6 == 64,
+  // the previous states are stored in a list inside <_ambigPrevLists> with
+  // the value <prevState> being an index into that list.
+  uint8_t  ambigPrev : 2;
 
   // Error state? Used in the context of <CmdLineOpts::max1MarkerRecomb>
   // A value of 1 means <this> is an error state.

@@ -12,7 +12,7 @@
 // initialize static members
 dynarray< dynarray<State*> >    Phaser::_hmm;
 dynarray<int>                   Phaser::_hmmMarker;
-dynarray< dynarray<uint16_t> >  Phaser::_ambigPrevLists;
+dynarray< dynarray<uint32_t> >  Phaser::_ambigPrevLists;
 dynarray< std::pair<uint8_t,uint64_t> > Phaser::_genos;
 Phaser::state_ht                Phaser::_stateHash;
 Phaser::state_idx_set           *Phaser::_curIdxSet;
@@ -522,6 +522,7 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     // Won't assign <parentPhase> field as all partial states have a value of
     // 0 here and it's never used
     //newState.parentPhase = 0;
+    // Won't assign <onlyPIstatesPrev> field: will set this in makeFullStates()
 
     assert((newState.iv & newState.unassigned) == 0ul);
   }
@@ -593,10 +594,17 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       State *newState = new State(partialStates[i]);
       newState->minRecomb = 0;
       newState->parentPhase = 0;
+      newState->onlyPIstatesPrev = 0; // see if stmt and comment below
       newState->ambigParPhase = 0;
       newState->ambigPrev = 0;
       newState->ambigParHet = 0;
       newState->error = 0;
+      // See note in phaser.h at definition of State::onlyPIstatesPrev
+      // Also below just before call to mapPrevToFull()
+      if (partialStates[i].hetParent == 2 &&
+	  !theFam->_parents->first->hasData() &&
+	  !theFam->_parents->second->hasData())
+	newState->onlyPIstatesPrev = 1;
       _hmm[0].append(newState);
     }
     return;
@@ -606,13 +614,24 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   _hmm.addEmpty();
   dynarray<State*> &prevStates = _hmm[prevHMMIndex];
 
-  uint16_t numPrev = prevStates.length();
+  uint32_t numPrev = prevStates.length();
   int numPartial = partialStates.length();
-  for(uint16_t prevIdx = 0; prevIdx < numPrev; prevIdx++) {
+  for(uint32_t prevIdx = 0; prevIdx < numPrev; prevIdx++) {
     const State *prevState = prevStates[prevIdx];
 
     for(int curIdx = 0; curIdx < numPartial; curIdx++) {
-      mapPrevToFull(prevState, prevIdx, partialStates[curIdx], childrenData);
+      const State &curPartial = partialStates[curIdx];
+      if (prevState->onlyPIstatesPrev &&
+	  curPartial.hetParent == 1)
+	// When both parents are missing data, initial PI states do not actually
+	// distinguish the two parents and so later FI markers will be ambiguous
+	// for which parent is heterozygous. Here we arbitrarily pick parent 0
+	// as the first heterozygous parent in these cases and omit states with
+	// parent 1 het.
+	// See the code at the beginning of this function for a similar choice
+	// at the first first informative marker.
+	continue;
+      mapPrevToFull(prevState, prevIdx, curPartial, childrenData);
     }
   }
 
@@ -624,15 +643,19 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   if (CmdLineOpts::max1MarkerRecomb > 0 && prevHMMIndex - 1 >= 0) {
     dynarray<State*> &back2States = _hmm[prevHMMIndex - 1];
 
-    uint16_t numBack2 = back2States.length();
-    for(uint16_t back2Idx = 0; back2Idx < numBack2; back2Idx++) {
+    uint32_t numBack2 = back2States.length();
+    for(uint32_t back2Idx = 0; back2Idx < numBack2; back2Idx++) {
       State *back2State = back2States[back2Idx];
 
       for(int curIdx = 0; curIdx < numPartial; curIdx++) {
+	const State &curPartial = partialStates[curIdx];
+	if (back2State->onlyPIstatesPrev &&
+	    curPartial.hetParent == 1)
+	  continue; // See comment in non-error version above
 	// Set back2Idx negative and shift by 1 so that the index 0 is also
 	// negative
 	mapPrevToFull(back2State, /*prevIdx=negative=>error*/ -back2Idx-1,
-		      partialStates[curIdx], childrenData);
+		      curPartial, childrenData);
       }
     }
   }
@@ -661,7 +684,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 // immediately previous marker; it will be skipped over and marked as an error
 // if by mapping a state from two markers back to the current state with a
 // penalty term there are overall fewer recombinations).
-void Phaser::mapPrevToFull(const State *prevState, int32_t prevIdx,
+void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
 			   const State &curPartial,
 			   const uint64_t childrenData[5]) {
   // (1) For each (current) partial state, map to an initial set of full state
@@ -785,12 +808,13 @@ void Phaser::mapPrevToFull(const State *prevState, int32_t prevIdx,
   uint8_t altPhaseType = isPI * 3 + (1 - isPI);
   // Above equivalent to the line below but has no branching
   //uint8_t altPhaseType = (isPI) ? 3 : 1;
+  uint8_t onlyPIstatesPrev = isPI * prevState->onlyPIstatesPrev;
   updateStates(fullIV, fullAmbig, fullUnassigned, ambig1Unassigned, recombs,
 	       prevState->unassigned, stdAmbigOnlyPrev, ambig1PrevInfo,
 	       curPartial.hetParent, curPartial.homParentGeno,
 	       /*initParPhase=default phase=*/ 0, altPhaseType, prevIdx,
-	       prevState->minRecomb, prevState->error, hetParentUndefined,
-	       childrenData);
+	       prevState->minRecomb, prevState->error, onlyPIstatesPrev,
+	       hetParentUndefined, childrenData);
 
   // For MT_PI states, have 1 or 2 more states to examine:
   // Exception is if one of the parents doesn't have any transmitted haplotypes
@@ -830,7 +854,7 @@ void Phaser::mapPrevToFull(const State *prevState, int32_t prevIdx,
 		 /*curPartial.hetParent=*/2, /*homParentGeno=*/G_MISS,
 		 /*initParPhase=parent 0 flip=*/1,
 		 /*altPhaseType=parent 1 flip=*/ 2, prevIdx,
-		 prevState->minRecomb, prevState->error,
+		 prevState->minRecomb, prevState->error, onlyPIstatesPrev,
 		 /*hetParentUndefined=*/ false, childrenData);
   }
 }
@@ -1124,8 +1148,9 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
 			  uint8_t hetParent, uint8_t homParentGeno,
 			  uint8_t initParPhase, uint8_t altPhaseType,
-			  int32_t prevIndex, uint16_t prevMinRecomb,
-			  uint8_t prevError, bool hetParentUndefined,
+			  int64_t prevIndex, uint16_t prevMinRecomb,
+			  uint8_t prevError, uint8_t onlyPIstatesPrev,
+			  bool hetParentUndefined,
 			  const uint64_t childrenData[5]) {
   // How many iterations of the loop? See various comments below.
   int numIter = 2;
@@ -1256,6 +1281,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       theState->hetParent = hetParent;
       theState->homParentGeno = homParentGeno;
       theState->parentPhase = curParPhase;
+      theState->onlyPIstatesPrev = onlyPIstatesPrev;
       theState->ambigParPhase = ambigLocal * (1 << altPhaseType);
       theState->ambigPrev = 0;
       theState->ambigParHet = 0;
@@ -1297,40 +1323,110 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       theState->ambigParPhase |= ambigLocal *
 				    ((1 << curParPhase) | (1 << altPhaseType));
 
+      const uint32_t MAX_IDX_IN_STATE = 1 << 6;
+
       // Have an ambiguous previous state -- add to list if one exists or
       // create one
-      uint16_t prevState = (prevIndex >= 0) ? prevIndex : -(prevIndex + 1);
-      if (theState->ambigPrev) {
-	// Already have a slot in <_ambigPrevLists>, so simply append to that.
-	// Can happen that <prevState> is already in the list; check whether
-	// that's the case (will necessarily be the last element since we
-	// consider prevStates sequentially in makeFullStates())
-	int lastElement = _ambigPrevLists[ theState->prevState ].length() - 1;
-	if (_ambigPrevLists[ theState->prevState ][lastElement] != prevState)
-	  _ambigPrevLists[ theState->prevState ].append(prevState);
-	else
-	  theState->ambigParPhase |= 1 << curParPhase;
-      }
-      else {
-	if (theState->prevState == prevState)
-	  theState->ambigParPhase |= 1 << curParPhase;
-	else {
-	  theState->ambigPrev = 1;
-	  // Get a slot in <_ambigPrevLists> to store list of previous states.
-	  // As documented in phaser.h (at the <State::ambigPrev> field),
-	  // <theState->prevState> is an index into <_ambigPrevList> when
-	  // <theState->ambigPrev = 1;
-	  assert(_ambigPrevLists.length() <= UINT16_MAX);
-	  uint16_t curPrev = theState->prevState;
-	  theState->prevState = _ambigPrevLists.length();
-	  _ambigPrevLists.addEmpty();
-	  _ambigPrevLists[ theState->prevState ].append(curPrev);
-	  _ambigPrevLists[ theState->prevState ].append(prevState);
-	}
+      uint32_t prevState = (prevIndex >= 0) ? prevIndex : -(prevIndex + 1);
+      ////////////////////////////////////////////////////////////////////////
+      // See comment at declaration of State::ambigPrev
+      // TODO: refactor: put in its own function
+      switch (theState->ambigPrev) {
+	case 2: // already storing list, so simply append
+	  {
+	    // Can happen that <prevState> is already in the list; check whether
+	    // that's the case (will necessarily be the last element since we
+	    // consider prevStates sequentially in makeFullStates())
+	    int lastElement = _ambigPrevLists[ theState->prevState ].length() - 1;
+	    if (_ambigPrevLists[ theState->prevState ][lastElement] != prevState)
+	      _ambigPrevLists[ theState->prevState ].append(prevState);
+	    else
+	      theState->ambigParPhase |= 1 << curParPhase;
+	  }
+	  break;
+
+	case 1: // storing ambiguous values in series of 6 bits in <prevState>
+	  {
+	    bool inserted = false;
+	    const uint32_t mask = (1 << 6) - 1;
+
+	    if (prevState < MAX_IDX_IN_STATE) {
+	      // <prevState> fits in 6 bits; simultaneously check; if there's
+	      // room for this new value; find where to put it; and ensure the
+	      // same value doesn't occur twice
+
+	      // first 6 bits shouldn't be the same as <prevState>
+	      uint32_t curPrevs = theState->prevState;
+	      assert((curPrevs & mask) != prevState);
+	      curPrevs >>= 6;
+	      for(int shift = 6; shift < 30; shift += 6) {
+		if (curPrevs == 0) {
+		  // found slot to insert: do so
+		  theState->prevState |= prevState << shift;
+		  inserted = true;
+		  break;
+		}
+		if ((curPrevs & mask) == prevState) {
+		  theState->ambigParPhase |= 1 << curParPhase;
+		  inserted = true;
+		  break;
+		}
+		curPrevs >>= 6;
+	      }
+	    }
+
+	    if (!inserted) {
+	      // Must store all ambiguous values in a list
+	      theState->ambigPrev = 2;
+	      uint32_t curPrevs = theState->prevState;
+	      uint32_t ambigIndex = _ambigPrevLists.length();
+	      theState->prevState = ambigIndex;
+	      _ambigPrevLists.addEmpty();
+	      for(int shift = 0; shift < 30; shift += 6) {
+		_ambigPrevLists[ambigIndex].append( curPrevs & mask );
+		curPrevs >>= 6;
+		if (curPrevs == 0)
+		  break; // got to last previous index
+	      }
+	      _ambigPrevLists[ambigIndex].append(prevState);
+	    }
+	  }
+	  break;
+
+	case 0: // previously unambiguous
+	  {
+	    uint32_t curPrev = theState->prevState;
+	    if (curPrev < MAX_IDX_IN_STATE && prevState < MAX_IDX_IN_STATE) {
+	      // Both values fit in 6 bits, set ambiguity and add the new
+	      // previous state
+	      theState->ambigPrev = 1;
+	      theState->prevState |= prevState << 6;
+	    }
+	    else {
+	      theState->ambigPrev = 2;
+	      uint32_t ambigIndex = _ambigPrevLists.length();
+	      theState->prevState = ambigIndex;
+	      _ambigPrevLists.addEmpty();
+	      _ambigPrevLists[ambigIndex].append(curPrev);
+	      _ambigPrevLists[ambigIndex].append(prevState);
+	    }
+	  }
+	  break;
+
+	default:
+	  fprintf(stderr, "ERROR: got impossible ambigPrev value %d\n",
+		  theState->ambigPrev);
+	  break;
       }
 
       // ambiguous for which parent is heterozygous?
       theState->ambigParHet = theState->hetParent ^ hetParent;
+
+      // conservatively indicate that only PI states previously occurred if all
+      // previous states were PI. This is conservative in that future states
+      // that trace back to this one will have ambiguities as to which parent
+      // is heterozygous (representing all possibilities)
+      theState->onlyPIstatesPrev *= onlyPIstatesPrev;
 
       // Sanity checks:
       assert(theState->parentPhase == curParPhase ||
@@ -1478,8 +1574,8 @@ void Phaser::checkClearErrorFlag(dynarray<State*> &curStates) {
 void Phaser::backtrace(NuclearFamily *theFam) {
   int lastIndex = _hmm.length() - 1;
 
-  uint16_t curStateIdx = findMinStates(_hmm[lastIndex]);
-  uint16_t prevStateIdx = UINT16_MAX;
+  uint32_t curStateIdx = findMinStates(_hmm[lastIndex]);
+  uint32_t prevStateIdx = UINT32_MAX;
   // Number of recombinations in <curState> relative to <prevState> below
   uint8_t numRecombs; // TODO: optimization: do we want this?
   for(int hmmIndex = lastIndex; hmmIndex >= 0; hmmIndex--) {
@@ -1496,7 +1592,7 @@ void Phaser::backtrace(NuclearFamily *theFam) {
     // numbers of recombinations at this marker and append their previous states
     // to <_prevIdxSet>.
     for(state_set_iter it = _curIdxSet->begin(); it != _curIdxSet->end(); it++){
-      uint16_t stateIdx = *it;
+      uint32_t stateIdx = *it;
       if (stateIdx == curStateIdx)
 	// don't treat the same state as <curState> as ambiguous
 	continue;
@@ -1530,12 +1626,8 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 
       if (!ambigState->ambigPrev)
 	_prevIdxSet->insert( ambigState->prevState ); // only one
-      else {
-	// multiple equivalent previous states: add them all
-	dynarray<uint16_t> &prevIdxs = _ambigPrevLists[ambigState->prevState];
-	for(int i = 0; i < prevIdxs.length(); i++)
-	  _prevIdxSet->insert( prevIdxs[i] );
-      }
+      else
+	collectAmbigPrevIdxs(ambigState, /*insertFirst=*/ true);
     }
 
     // Remove any ambig par phase types that have equivalent phase to <curState>
@@ -1563,10 +1655,7 @@ void Phaser::backtrace(NuclearFamily *theFam) {
       else {
 	// multiple previous states: add all but the first to <_prevIdxSet>
 	// the first will be the new previous state
-	dynarray<uint16_t> &prevIdxs = _ambigPrevLists[ curState->prevState ];
-	prevStateIdx = prevIdxs[0];
-	for(int i = 1; i < prevIdxs.length(); i++)
-	  _prevIdxSet->insert( prevIdxs[i] );
+	prevStateIdx = collectAmbigPrevIdxs(curState, /*insertFirst=*/false);
       }
       State *prevState = _hmm[hmmIndex-1][ prevStateIdx ];
 
@@ -1643,11 +1732,11 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 // numbers of recombinations. Returns the index of the first state encountered
 // that is minimal and stores any other states that are tied for minimum in
 // <_curIdxSet>.
-uint16_t Phaser::findMinStates(dynarray<State*> &theStates) {
+uint32_t Phaser::findMinStates(dynarray<State*> &theStates) {
   uint16_t minLastMarker = UINT16_MAX;
   // The state we will designate as the minimum even as there may ambiguity
   // stored in <_stateIdxSet>
-  uint16_t minStateIdx = UINT16_MAX;
+  uint32_t minStateIdx = UINT32_MAX;
 
   int numStates = theStates.length();
   for(int i = 0; i < numStates; i++) {
@@ -1673,4 +1762,59 @@ void Phaser::deleteStates(dynarray<State*> &theStates) {
     delete theStates[i];
   }
   theStates.clear();
+}
+
+// Assumes that fromState->ambigPrev > 0 (i.e., there is some ambiguity).
+// Inserts all indexes referenced in <fromState->prevState> into
+// <_prevIdxSet>. If <insertFirst> is false, does not insert the first
+// index in <fromState->prevState>, but instead returns that value to the
+// caller.
+uint32_t Phaser::collectAmbigPrevIdxs(State *fromState, bool insertFirst) {
+  const uint32_t mask = (1 << 6) - 1;
+  uint32_t retIdx = UINT32_MAX;
+
+  switch (fromState->ambigPrev) {
+    // We assume the caller deals with this case:
+//    case 0: // only one
+//      _prevIdxSet->insert( fromState->prevState );
+//      break;
+
+    case 1: // multiple previous states in <prevState>: add all
+      {
+	uint32_t thePrevs = fromState->prevState;
+	int shift = 0;
+	if (!insertFirst) {
+	  retIdx = thePrevs & mask;
+	  shift = 6;
+	  thePrevs >>= 6;
+	}
+	for( ; shift < 30; shift += 6) {
+	  _prevIdxSet->insert( thePrevs & mask );
+	  thePrevs >>= 6;
+	  if (thePrevs == 0)
+	    break; // got to last previous index
+	}
+      }
+      break;
+
+    case 2: // previous states in <_ambigPrevLists>: add all
+      {
+	dynarray<uint32_t> &prevIdxs = _ambigPrevLists[fromState->prevState];
+	int i = 0;
+	if (!insertFirst) {
+	  retIdx = prevIdxs[0];
+	  i = 1;
+	}
+	for( ; i < prevIdxs.length(); i++)
+	  _prevIdxSet->insert( prevIdxs[i] );
+      }
+      break;
+
+    default:
+      fprintf(stderr, "ERROR: got impossible ambigPrev value %d\n",
+	      fromState->ambigPrev);
+      break;
+  }
+
+  return retIdx;
 }
