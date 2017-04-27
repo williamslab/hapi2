@@ -27,17 +27,30 @@ class Analysis {
     // public static methods
     //////////////////////////////////////////////////////////////////
 
-    static void findCOs(NuclearFamily *theFam, FILE *out);
+    static void findCOs(NuclearFamily *theFam, FILE *out, int chrIdx);
 
   private:
+    //////////////////////////////////////////////////////////////////
+    // private static methods
+    //////////////////////////////////////////////////////////////////
+
+    static void printCO(std::list<Recomb>::iterator record, FILE *out, int p,
+			NuclearFamily *theFam, const char *chrName,
+			int firstMarker);
+
     // List storing marker index of informative positions for the two parents
     // (indexed) that are upstream of the current position in an analysis
     static dynarray<int> _informMarkers[2];
 
+    // Parallel array (technically arrays for the first index) with
+    // <_informMarkers> that stores the <phase.ambigMiss> value corresponding
+    // to the given informative marker
+    static dynarray<uint64_t> _ambigMiss[2];
+
     // Number of consistent informative markers observed for each parent/child
     // combination. This is only relevant at the beginning of the chromosome
     // where we are trying to establish what the background haplotype is. When
-    // all children have greater than 10 (TODO: use a CmdLineOpt value here) we
+    // all children have greater than CmdLineOpt::edgeCO we
     // use a simple boolean to indicate things are trustworthy
     static dynarray<int> _numInformForChild[2];
 

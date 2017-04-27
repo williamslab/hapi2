@@ -28,6 +28,8 @@ int   CmdLineOpts::startPos = 0;
 int   CmdLineOpts::endPos = INT_MAX;
 int   CmdLineOpts::forceWrite = 0;
 int   CmdLineOpts::max1MarkerRecomb = DEFAULT_NO_ERROR_MAX;
+int   CmdLineOpts::detectCO = 0;
+int   CmdLineOpts::edgeCO = 0;
 
 // Parses the command line options for the program.
 bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
@@ -35,6 +37,8 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     START_POS = CHAR_MAX + 1,
     END_POS,
     NO_ERROR_MAX,
+    DETECT_CO,
+    EDGE_CO,
   };
 
   static struct option const longopts[] =
@@ -50,10 +54,12 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"start", required_argument, NULL, START_POS},
     {"end", required_argument, NULL, END_POS},
     {"no_error_max", required_argument, NULL, NO_ERROR_MAX},
-    {"impute2", no_argument, &CmdLineOpts::useImpute2Format, 1},
+//    {"impute2", no_argument, &CmdLineOpts::useImpute2Format, 1},
 //    {"vcf_out", no_argument, &CmdLineOpts::vcfOutput, 1},
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
     {"force", no_argument, &CmdLineOpts::forceWrite, 1},
+    {"detect_co", required_argument, NULL, DETECT_CO},
+    {"edge_co", required_argument, NULL, EDGE_CO},
     {0, 0, 0, 0}
   };
 
@@ -158,7 +164,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
       case START_POS:
 	startPos = strtol(optarg, &endptr, 10);
 	if (errno != 0 || *endptr != '\0') {
-	  fprintf(stderr, "ERROR: unable to parse starting position option\n");
+	  fprintf(stderr, "ERROR: unable to parse starting position option as integer\n");
 	  if (errno != 0)
 	    perror("strtol");
 	  exit(2);
@@ -168,7 +174,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	endPosSet = true;
 	endPos = strtol(optarg, &endptr, 10);
 	if (errno != 0 || *endptr != '\0') {
-	  fprintf(stderr, "ERROR: unable to parse starting position option\n");
+	  fprintf(stderr, "ERROR: unable to parse starting position option as integer\n");
 	  if (errno != 0)
 	    perror("strtol");
 	  exit(2);
@@ -177,12 +183,39 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
       case NO_ERROR_MAX:
 	max1MarkerRecomb = strtol(optarg, &endptr, 10);
 	if (errno != 0 || *endptr != '\0') {
-	  fprintf(stderr, "ERROR: unable to parse no_err_max option\n");
+	  fprintf(stderr, "ERROR: unable to parse no_err_max option as integer\n");
 	  if (errno != 0)
 	    perror("strtol");
 	  exit(2);
 	}
 	break;
+      case DETECT_CO:
+	detectCO = strtol(optarg, &endptr, 10);
+	if (errno != 0 || *endptr != '\0') {
+	  fprintf(stderr, "ERROR: unable to parse detect_co option as integer\n");
+	  if (errno != 0)
+	    perror("strtol");
+	  exit(2);
+	}
+	if (detectCO <= 0) {
+	  fprintf(stderr, "ERROR: must provide strictly positive value for detect_co option\n");
+	  haveGoodArgs = false;
+	}
+	break;
+      case EDGE_CO:
+	edgeCO = strtol(optarg, &endptr, 10);
+	if (errno != 0 || *endptr != '\0') {
+	  fprintf(stderr, "ERROR: unable to parse edge_co option as integer\n");
+	  if (errno != 0)
+	    perror("strtol");
+	  exit(2);
+	}
+	if (edgeCO <= 0) {
+	  fprintf(stderr, "ERROR: must provide strictly positive value for edge_co option\n");
+	  haveGoodArgs = false;
+	}
+	break;
+
 
       case '?':
 	// bad option; getopt_long already printed error message
@@ -242,6 +275,14 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	    "WARNING: using ending position, with no starting position\n");
   }
 
+  if (detectCO && !edgeCO)
+    // set edgeCO if detectCO enabled but edgeCO not specified
+    edgeCO = detectCO;
+  else if (edgeCO > detectCO) {
+    fprintf(stderr, "ERROR: --edge_co value cannot be greater than --detect_co\n");
+    haveGoodArgs = false;
+  }
+
   // TODO: allow user to specify X chromosome name; if unspecified, do:
   XchrName = new char[2];
   strcpy(XchrName, "X");
@@ -262,7 +303,7 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "%s [ARGUMENTS]\n", programName);
   fprintf(out, "\n");
   fprintf(out, "REQUIRED ARGUMENTS:\n");
-  fprintf(out, "  -o, --out <prefix>\toutput file prefix (suffix .phgeno,.phsnp,.phind,.log)\n");
+  fprintf(out, "  -o, --out <prefix>\toutput file prefix (suffix .co,.iv,.txt,.log)\n");
   fprintf(out, " AND EITHER:\n");
   fprintf(out, "  -g, --geno <filename>\tgenotype file in PLINK BED format\n");
   fprintf(out, "  -s, --snp <filename>\tPLINK BIM file\n");
@@ -286,13 +327,25 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "  --start <#>\t\tstart position on given chromosome\n");
   fprintf(out, "  --end <#>\t\tend position on given chromosome\n");
   fprintf(out, "\n");
+  fprintf(out, "  --detect_co <#>\tDetect crossover events\n");
+  fprintf(out, "\t\t\tAn event is called a crossover when at least the\n");
+  fprintf(out, "\t\t\tspecified number of informative markers descend from the\n");
+  fprintf(out, "\t\t\trecombined-to haplotype.\n");
+  fprintf(out, "\t\t\tValues >=5 are recommended. Smaller values may detect\n");
+  fprintf(out, "\t\t\tnon-crossovers or events driven by assembly errors\n");
+  fprintf(out, "  --edge_co <#>\t\tUsed with --detect_co to set a different value\n");
+  fprintf(out, "\t\t\tfor establishing the \"background haplotype\" at the\n");
+  fprintf(out, "\t\t\tbeginning and end of chromosomes. At least this many\n");
+  fprintf(out, "\t\t\tinformative markers must occur for a given child before\n");
+  fprintf(out, "\t\t\tany crossovers are called. If unspecified, uses the\n");
+  fprintf(out, "\t\t\t--detect_co value; cannot be greater than this\n");
   fprintf(out, "  --no_err_max <#>\tMaximum number of recombinations attributable to a\n");
   fprintf(out, "\t\t\tsingle marker before it is called an error. Default: %d.\n",
 	  DEFAULT_NO_ERROR_MAX);
   fprintf(out, "\t\t\tSet >=2 to detect single marker non-crossovers\n");
   fprintf(out, "\n");
-  fprintf(out, "  --impute2\t\tprint phase results in IMPUTE2 format\n");
-  // Note: not currently supporting VCF output
+  // Note: not currently supporting VCF or IMPUTE2 output
+//  fprintf(out, "  --impute2\t\tprint phase results in IMPUTE2 format\n");
 //  fprintf(out, "  --vcf_out\t\toutput phase in bgzip VCF format (default for -v input)\n");
   fprintf(out, "  --force\t\tforce writing to output files (overwrite if they exist)\n");
   fprintf(out, "\n");
