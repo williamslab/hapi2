@@ -237,16 +237,16 @@ bool openFilesToWrite(char *&filename, FILE *resultsFiles[3], int chrIdx,
 
   bool haveAnOutput = false; // only if one of the outputs is OK to write
   const char *types[3] = { "hap", "iv", "co" };
-  const char *ext[3] = { "txt", "csv", "csv" };
+  const char *ext[3] = { ".txt", ".csv", "" };
   const int  wantType[3] = { CmdLineOpts::txtOutput, CmdLineOpts::ivOutput,
 			     CmdLineOpts::detectCO };
   for(int o = 0; o < 3; o++) {
     if (wantType[o]) {
       if (famIdLen == 0)
-	sprintf(filename, "%s/%s-%s-%s.%s.%s", CmdLineOpts::outPrefix,
+	sprintf(filename, "%s/%s-%s-%s.%s%s", CmdLineOpts::outPrefix,
 		types[o], parentIds[0], parentIds[1], chrName, ext[o]);
       else
-	sprintf(filename, "%s/%s-%.*s-%s-%s.%s.%s", CmdLineOpts::outPrefix,
+	sprintf(filename, "%s/%s-%.*s-%s-%s.%s%s", CmdLineOpts::outPrefix,
 		types[o], famIdLen, parentIds[0],
 		&parentIds[0][famIdLen+1], &parentIds[1][famIdLen+1],
 		chrName, ext[o]);
