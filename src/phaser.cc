@@ -643,8 +643,8 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   if (CmdLineOpts::max1MarkerRecomb > 0 && prevHMMIndex - 1 >= 0) {
     dynarray<State*> &back2States = _hmm[prevHMMIndex - 1];
 
-    uint32_t numBack2 = back2States.length();
-    for(uint32_t back2Idx = 0; back2Idx < numBack2; back2Idx++) {
+    int64_t numBack2 = back2States.length();
+    for(int64_t back2Idx = 0; back2Idx < numBack2; back2Idx++) {
       State *back2State = back2States[back2Idx];
 
       for(int curIdx = 0; curIdx < numPartial; curIdx++) {
