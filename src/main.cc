@@ -3,6 +3,7 @@
 // This program is distributed under the terms of the GNU General Public License
 
 #include <sys/stat.h>
+#include <errno.h>
 #include <string.h>
 #include <zlib.h>
 #include <genetio/marker.h>
@@ -11,53 +12,27 @@
 #include <genetio/util.h>
 #include "cmdlineopts.h"
 #include "phaser.h"
+#include "analysis.h"
 
-void checkIfFileExists(char *filename, bool printWarning);
-void printPhaseType(FILE *out);
+FILE *createOutDirOpenLog(char *filename);
+bool openFilesToWrite(char *&filename, FILE *resultFiles[3], int chrIdx,
+		      const char *parentIds[2], int famIdLen, int totalFileLen,
+		      int &allocFilenameLen, FILE *log);
+bool checkIfFileExists(char *filename, bool printWarning);
 
 int main(int argc, char **argv) {
   bool success = CmdLineOpts::parseCmdLineOptions(argc, argv);
   if (!success)
     return -1;
 
-  char filename[FILENAME_LEN];
+  // Allocate a long string so we can have filenames with the parent ids, the
+  // family ids, the chromosome name, and the file extension.
+  // If needed, we'll increase this below
+  int prefixLen = strlen(CmdLineOpts::outPrefix);
+  int allocFilenameLen = prefixLen + 1024;
+  char *filename = new char[ allocFilenameLen ];
 
-  // Ensure that we'll be able to print to the output file at the end:
-  if (strlen(CmdLineOpts::outFile) >FILENAME_LEN - 8) {//8 chars for .phgeno\0
-    fprintf(stderr, "ERROR: output filename too long!");
-    exit(1);
-  }
-  if (CmdLineOpts::vcfOutput) {
-    sprintf(filename, "%s.vcf.gz", CmdLineOpts::outFile);
-    checkIfFileExists(filename, CmdLineOpts::forceWrite);
-  }
-  else if (CmdLineOpts::useImpute2Format) {
-    // Check whether the .haps output file exists:
-    sprintf(filename, "%s.haps.gz", CmdLineOpts::outFile);
-    checkIfFileExists(filename, CmdLineOpts::forceWrite);
-    // Check whether the .sample output file exists:
-    sprintf(filename, "%s.sample", CmdLineOpts::outFile);
-    checkIfFileExists(filename, CmdLineOpts::forceWrite);
-  }
-  else {
-    // Check whether the phgeno output file exists:
-    sprintf(filename, "%s.phgeno.gz", CmdLineOpts::outFile);
-    checkIfFileExists(filename, CmdLineOpts::forceWrite);
-    // Check whether the phind output file exists:
-    sprintf(filename, "%s.phind", CmdLineOpts::outFile);
-    checkIfFileExists(filename, CmdLineOpts::forceWrite);
-    // Check whether the phsnp output file exists:
-    sprintf(filename, "%s.phsnp", CmdLineOpts::outFile);
-    checkIfFileExists(filename, CmdLineOpts::forceWrite);
-  }
-
-  // open the .log file for writing
-  sprintf(filename, "%s.log", CmdLineOpts::outFile);
-  FILE *log = fopen(filename, "w");
-  if (!log) {
-    fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
-    exit(1);
-  }
+  FILE *log = createOutDirOpenLog(filename);
 
   //////////////////////////////////////////////////////////////////////////
   // Output files don't already exist, can go forward!
@@ -71,20 +46,38 @@ int main(int argc, char **argv) {
 	    RELEASE_DATE);
 
     if (CmdLineOpts::vcfInput) {
-      fprintf(out, "VCF input file:\t  %s\n", CmdLineOpts::genoFile);
+      fprintf(out, "VCF input file:\t\t%s\n", CmdLineOpts::genoFile);
     }
     else {
-      fprintf(out, "Genotype file:\t  %s\n", CmdLineOpts::genoFile);
-      fprintf(out, "SNP file:\t  %s\n", CmdLineOpts::markerFile);
-      fprintf(out, "Individual file:  %s\n", CmdLineOpts::indFile);
+      fprintf(out, "Genotype file:\t\t%s\n", CmdLineOpts::genoFile);
+      fprintf(out, "SNP file:\t\t%s\n", CmdLineOpts::markerFile);
+      fprintf(out, "Individual file:\t%s\n", CmdLineOpts::indFile);
     }
-    fprintf(out, "Output prefix:\t  %s\n", CmdLineOpts::outFile);
+    fprintf(out, "Output directory:\t%s\n", CmdLineOpts::outPrefix);
 
     fprintf(out, "\n");
 
     if (CmdLineOpts::onlyChr != NULL) {
-      printf("Chromosome:\t  %s\n", CmdLineOpts::onlyChr);
+      fprintf(out, "Chromosome:\t\t%s\n\n", CmdLineOpts::onlyChr);
     }
+
+    fprintf(out, "Output to be generated in output directory:\n");
+    if (CmdLineOpts::txtOutput) {
+      fprintf(out, "  Text format haplotypes\n");
+    }
+    if (CmdLineOpts::ivOutput) {
+      fprintf(out, "  Inheritance vectors for all markers\n");
+    }
+    if (CmdLineOpts::detectCO) {
+      fprintf(out, "  Detected COs, %d informative markers required to call CO\n",
+	      CmdLineOpts::detectCO);
+    }
+    if (CmdLineOpts::edgeCO != CmdLineOpts::detectCO) {
+      fprintf(out, "    Background haplotype at chromosome start/end established with %d markers\n",
+	      CmdLineOpts::edgeCO);
+    }
+
+    fprintf(out, "\n");
   }
 
   //////////////////////////////////////////////////////////////////////////
@@ -98,124 +91,196 @@ int main(int argc, char **argv) {
 				 /*allowEmptyParents=*/ true,
 				 /*bulkData=*/ true);
 
-  // open the .phgeno file for writing before phasing, even though we won't
-  // write it until phasing completes.  This ensures we have write
-  // permissions for this most important file (others can be generated by the
-  // user from the input if they fail to write later).
-  gzFile gzout;
-  if (CmdLineOpts::useImpute2Format) {
-    sprintf(filename, "%s.haps.gz", CmdLineOpts::outFile);
-    gzout = gzopen(filename, "w");
-    if (!gzout) {
-      fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
-      exit(1);
-    }
-  }
-  else {
-    sprintf(filename, "%s.phgeno.gz", CmdLineOpts::outFile);
-    gzout = gzopen(filename, "w");
-    if (!gzout) {
-      fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
-      exit(1);
-    }
-  }
-
-  printf("\nPhasing families with two or more children out of %lu families... ",
-	 NuclearFamily::numFamilies());
-  fflush(stdout);
-
-  // Phase!
-  int numChrs = Marker::getNumChroms();
-
-  Phaser::init();
-  NuclearFamily::fam_ht_iter iter = NuclearFamily::familyIter();
-  for( ; iter != NuclearFamily::familyIterEnd(); iter++) {
+  dynarray<NuclearFamily *> toBePhased;
+  for(NuclearFamily::fam_ht_iter iter = NuclearFamily::familyIter();
+			       iter != NuclearFamily::familyIterEnd(); iter++) {
     NuclearFamily *theFam = iter->second;
     if (theFam->numChildren() > 1) {
-      // phase the current family on each chromosome successively:
-      // require at least two children (trios are better to phase in a
-      // population context)
-      theFam->initFam();
-      for(int chrIdx = 0; chrIdx < numChrs; chrIdx++) {
-	Phaser::run(theFam, chrIdx);
-      }
-      // TODO: print phase
+      int childrenWithData = 0;
+      for(int c = 0; c < theFam->numChildren(); c++)
+	if (theFam->_children[c]->hasData())
+	  childrenWithData++;
+      if (childrenWithData >= 2)
+	toBePhased.append(theFam);
     }
+  }
+
+  ///////////////////////////////////////////////////////////////////////////
+  // Phase!
+  int numChrs = Marker::getNumChroms();
+  int numFamsToBePhased = toBePhased.length();
+
+  Phaser::init();
+  int numFinished = 0;
+  for(int f = 0; f < numFamsToBePhased; f++) {
+
+    for(int o = 0; o < 2; o++) {
+      FILE *out = outs[o];
+      fprintf(out, "Phasing families with two or more children... %d / %d",
+	      numFinished, numFamsToBePhased);
+    }
+    printf("\r");
+    fflush(stdout);
+    fprintf(log, "\n");
+
+
+    NuclearFamily *theFam = toBePhased[f];
+    const char *parentIds[2] = { theFam->_parents->first->getId(),
+				 theFam->_parents->second->getId() };
+    int famIdLen = theFam->_parents->first->getFamilyIdLength();
+    // add 4 for prefix (e.g., /hap), 3 for dashes between ids, and 4 for ".ext"
+    int famSpecificFileLen = strlen(parentIds[0]) + strlen(parentIds[1]) +
+			     famIdLen + 4 + 3 + 4;
+
+    // Phase the current family on each chromosome successively and print
+    // the results the user requested
+    theFam->initFam();
+    for(int chrIdx = 0; chrIdx < numChrs; chrIdx++) {
+      FILE *resultsFiles[3];
+      bool shouldPhase = openFilesToWrite(filename, resultsFiles, chrIdx,
+			  parentIds, famIdLen,
+			  /*totalFileLen=*/ prefixLen + famSpecificFileLen,
+			  allocFilenameLen, log);
+
+      if (!shouldPhase) {
+	for(int o = 0; o < 2; o++) {
+	  FILE *out = outs[o];
+	  fprintf(out, "Unable to write any output for chr %s: will not phase it\n",
+		  Marker::getChromName(chrIdx));
+	}
+	continue;
+      }
+
+      Phaser::run(theFam, chrIdx);
+
+      if (CmdLineOpts::txtOutput && resultsFiles[0]) {
+	theFam->printHapTxt(resultsFiles[0], chrIdx);
+	fclose(resultsFiles[0]);
+      }
+      if (CmdLineOpts::ivOutput && resultsFiles[1]) {
+	theFam->printIvCSV(resultsFiles[1], chrIdx);
+	fclose(resultsFiles[1]);
+      }
+      if (CmdLineOpts::detectCO && resultsFiles[2]) {
+	Analysis::findCOs(theFam, resultsFiles[2], chrIdx);
+	fclose(resultsFiles[2]);
+      }
+    }
+
+    numFinished++;
   }
 
   // Finished phasing all families!
-  printf("done.\n");
-
-  // TODO: after phasing results are stored, remove this exit call
-  exit(0);
-
-  mult_printf(outs, "\nPrinting... ");
-  fflush(stdout);
-
-  if (CmdLineOpts::useImpute2Format) {
-    PersonIO<PersonBulk>::printGzImpute2Haps(gzout);
-    gzclose(gzout);
-
-    // Print sample file:
-    sprintf(filename, "%s.sample", CmdLineOpts::outFile);
-    FILE *out = fopen(filename, "w");
-    if (!out) {
-      fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
-      perror("open");
-    }
-    else {
-      PersonIO<PersonBulk>::printImpute2SampleFile(out);
-      fclose(out);
-    }
-  }
-  else {
-    // Print final haplotypes to phgeno file (opened above):
-    PersonIO<PersonBulk>::printGzEigenstratPhased(gzout);
-    gzclose(gzout);
-
-    // Print phind file:
-    sprintf(filename, "%s.phind", CmdLineOpts::outFile);
-    FILE *out = fopen(filename, "w");
-    if (!out) {
-      fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
-      perror("open");
-    }
-    else {
-      PersonIO<PersonBulk>::printPhasedIndFile(out);
-      fclose(out);
-    }
-    // Print phsnp file:
-    sprintf(filename, "%s.phsnp", CmdLineOpts::outFile);
-    out = fopen(filename, "w");
-    if (!out) {
-      fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
-      perror("open");
-    }
-    else {
-      Marker::printSNPFile(out);
-      fclose(out);
-    }
-  }
-
   for(int o = 0; o < 2; o++) {
     FILE *out = outs[o];
-    fprintf(out, "done.\n");
+    fprintf(out, "Phasing families with two or more children... done");
   }
+  printf("               \n");
+  fprintf(log, "\n");
 
   fclose(log);
 }
 
-void checkIfFileExists(char *filename, bool printWarning) {
-  struct stat buffer;
-  if (stat( filename, &buffer) == 0) {
-    if (printWarning) {
-      fprintf(stderr, "WARNING: output filename %s exists; --force set, so overwriting\n",
-	      filename);
+// Creates directory that is the output prefix specified by the user and also
+// opens the log file, returning the FILE * of that file
+FILE *createOutDirOpenLog(char *filename) {
+  // make the directory to store the output in
+  if (mkdir(CmdLineOpts::outPrefix, 0777) != 0) {
+    if (errno == EEXIST) {
+      struct stat buffer;
+      if (stat( CmdLineOpts::outPrefix, &buffer) == 0) {
+	if (!S_ISDIR(buffer.st_mode)) {
+	  fprintf(stderr, "ERROR: %s exists and is not a directory\n",
+		  CmdLineOpts::outPrefix);
+	  exit(5);
+	}
+	// else: success -- directory already created
+      }
+      else {
+	fprintf(stderr, "ERROR: unable to access %s\n", CmdLineOpts::outPrefix);
+	perror("stat");
+      }
     }
     else {
-      fprintf(stderr, "ERROR: output filename %s exists; won't overwrite so dying...\n",
-	      filename);
+      fprintf(stderr, "ERROR: couldn't create directory %s\n",
+	      CmdLineOpts::outPrefix);
+      perror("mkdir");
       exit(1);
     }
   }
+
+  // open the .log file for writing
+  sprintf(filename, "%s.log", CmdLineOpts::outPrefix);
+  FILE *log = fopen(filename, "w");
+  if (!log) {
+    fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
+    perror("open");
+    exit(1);
+  }
+
+  return log;
+}
+
+// Attempts to open the files to be printed to, and alerts the user if any
+// exist. Returns true if at least one output file exists
+bool openFilesToWrite(char *&filename, FILE *resultsFiles[3], int chrIdx,
+		      const char *parentIds[2], int famIdLen, int totalFileLen,
+		      int &allocFilenameLen, FILE *log) {
+  const char *chrName = Marker::getChromName(chrIdx);
+  int chrNameLen = strlen(chrName);
+
+  if (totalFileLen + chrNameLen + 1 > allocFilenameLen) {
+    delete [] filename;
+    allocFilenameLen = (totalFileLen + chrNameLen + 1) * 2;
+    filename = new char[ allocFilenameLen ];
+  }
+
+  bool haveAnOutput = false; // only if one of the outputs is OK to write
+  const char *types[3] = { "hap", "iv", "co" };
+  const char *ext[3] = { "txt", "csv", "csv" };
+  const int  wantType[3] = { CmdLineOpts::txtOutput, CmdLineOpts::ivOutput,
+			     CmdLineOpts::detectCO };
+  for(int o = 0; o < 3; o++) {
+    if (wantType[o]) {
+      if (famIdLen == 0)
+	sprintf(filename, "%s/%s-%s-%s.%s.%s", CmdLineOpts::outPrefix,
+		types[o], parentIds[0], parentIds[1], chrName, ext[o]);
+      else
+	sprintf(filename, "%s/%s-%.*s-%s-%s.%s.%s", CmdLineOpts::outPrefix,
+		types[o], famIdLen, parentIds[0],
+		&parentIds[0][famIdLen+1], &parentIds[1][famIdLen+1],
+		chrName, ext[o]);
+
+      bool okToWrite = checkIfFileExists(filename, CmdLineOpts::forceWrite);
+      haveAnOutput = haveAnOutput || okToWrite;
+      if (okToWrite) {
+	resultsFiles[o] = fopen(filename, "w");
+	if(!resultsFiles[o]) {
+	  fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
+	  perror("open");
+	  fprintf(log, "ERROR: couldn't open %s for writing!\n", filename);
+	  fprintf(log, "open: %s\n", strerror(errno));
+	}
+      }
+    }
+  }
+
+  return haveAnOutput;
+}
+
+bool checkIfFileExists(char *filename, bool printWarning) {
+  struct stat buffer;
+  if (stat( filename, &buffer) == 0) {
+    if (printWarning) {
+      fprintf(stderr, "WARNING: file %s exists; --force set, so overwriting\n",
+	      filename);
+      return true;
+    }
+    else {
+      fprintf(stderr, "ERROR: file %s exists; use --force to overwrite\n",
+	      filename);
+      return false;
+    }
+  }
+  return true;
 }

@@ -73,11 +73,11 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
       switch(mt) {
 	case 1 << MT_ERROR:
 	  theFam->setStatus(/*marker=*/ m, PHASE_ERROR, parentData,
-			    childrenData[4]);
+			    childrenData[4], childrenData[G_MISS] &_parBits[0]);
 	  break;
 	case 1 << MT_AMBIG:
 	  theFam->setStatus(/*marker=*/ m, PHASE_AMBIG, parentData,
-			    childrenData[4]);
+			    childrenData[4], childrenData[G_MISS] &_parBits[0]);
 	  break;
       }
       continue;
@@ -89,7 +89,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
       // the children are heterozygous, the marker is ambiguous and handled
       // just above.
       theFam->setStatus(/*marker=*/ m, PHASE_UNINFORM, parentData,
-			childrenData[4]);
+			childrenData[4], childrenData[G_MISS] &_parBits[0]);
       continue;
     }
 
@@ -1599,16 +1599,24 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 
       State *ambigState = _hmm[curHmmIndex][stateIdx];
 
-      // The following results in <hetParDiff> == 1 when the two values
-      // differ. Note that if one is 0 and the other is 2, the differing
-      // bit will be the second one, so we shift in the second line:
       uint8_t hetParDiff = curState->hetParent ^ ambigState->hetParent;
-      hetParDiff = (hetParDiff & 1) | (hetParDiff >> 1);
-      curAmbigParHet |= hetParDiff;
+      // binary indicator for whether the two states have different
+      // <hetParent> values
+      uint8_t hetParIsDiff = (hetParDiff & 1) | (hetParDiff >> 1);
+      // When one of the <hetParent> values is 2 and the other is not, we
+      // want to indicate this in <curAmbigParHet> with bit 1 set (i.e.,
+      // binary 2). The next section of code does this.
+      // Note that when neither <hetParent> values are 2, a difference
+      // between them will always set bit 0 in <hetParDiff> which is what
+      // we cant in <curAmbigParHet>
+      uint8_t either2 = (curState->hetParent | ambigState->hetParent) >> 1;
+      curAmbigParHet |= hetParIsDiff *
+				(either2 * 2 + (1 - either2) * hetParDiff);
 
-      // only track differences in parent phase assignments if <hetParDiff> == 0
-      // otherwise the values of the parent phase assignments are not comparable
-      curAmbigParPhase |= (1 - hetParDiff) *
+      // only track differences in parent phase assignments if the two
+      // <hetParent> values are the same.  Otherwise the values of the
+      // parent phase assignments are not comparable.
+      curAmbigParPhase |= (1 - hetParIsDiff) *
 		   ((1 << ambigState->parentPhase) | ambigState->ambigParPhase);
 
       // Add the previous state index(es) to <_prevIdxSet> so long as the
@@ -1642,8 +1650,11 @@ void Phaser::backtrace(NuclearFamily *theFam) {
       // need deal with curState->error == 1:
       if (curState->error & 1) {
 	// Set error for immediately previous marker.
+	uint64_t childrenData = _genos[curHmmIndex].second;
+	uint64_t missing = (childrenData & _parBits[0]) &
+					  ~((childrenData & _parBits[1]) >> 1);
 	theFam->setStatus(/*marker=*/ _hmmMarker[hmmIndex-1], PHASE_ERR_RECOMB,
-			  _genos[hmmIndex-1].first, _genos[hmmIndex-1].second);
+			  _genos[hmmIndex-1].first, childrenData, missing);
 	// <curState->prevState> references a state two indexes back
 	deleteStates(_hmm[hmmIndex-1]);
 	hmmIndex--;

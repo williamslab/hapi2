@@ -18,7 +18,9 @@ char *CmdLineOpts::genoFile = NULL;
 char *CmdLineOpts::indFile = NULL;
 char *CmdLineOpts::markerFile = NULL;
 int   CmdLineOpts::vcfInput = 0;
-char *CmdLineOpts::outFile = NULL;
+char *CmdLineOpts::outPrefix = NULL;
+int   CmdLineOpts::txtOutput = 0;
+int   CmdLineOpts::ivOutput = 0;
 int   CmdLineOpts::useImpute2Format = 0;
 int   CmdLineOpts::vcfOutput = 0;
 int   CmdLineOpts::noFamilyId = 0;
@@ -50,6 +52,10 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"plink", required_argument, NULL, 'p'},
 //    {"vcf", required_argument, NULL, 'v'},
     {"out",  required_argument, NULL, 'o'},
+    {"txt", no_argument, &CmdLineOpts::txtOutput, 1},
+    {"iv", no_argument, &CmdLineOpts::ivOutput, 1},
+    {"detect_co", required_argument, NULL, DETECT_CO},
+    {"edge_co", required_argument, NULL, EDGE_CO},
     {"chr", required_argument, NULL, 'c'},
     {"start", required_argument, NULL, START_POS},
     {"end", required_argument, NULL, END_POS},
@@ -58,8 +64,6 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 //    {"vcf_out", no_argument, &CmdLineOpts::vcfOutput, 1},
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
     {"force", no_argument, &CmdLineOpts::forceWrite, 1},
-    {"detect_co", required_argument, NULL, DETECT_CO},
-    {"edge_co", required_argument, NULL, EDGE_CO},
     {0, 0, 0, 0}
   };
 
@@ -156,7 +160,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	vcfInput = 1;
 	break;
       case 'o':
-	outFile = optarg;
+	outPrefix = optarg;
 	break;
       case 'c':
 	onlyChr = optarg;
@@ -231,13 +235,13 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
   /////////////////////////////////////////////////////////////////////////////
   // Check for errors in command line options
 
-  // For VCF format input, only genoFile and outFile should be set; others NULL
+  // For VCF format input, only genoFile and outPrefx should be set; others NULL
   if (vcfInput) {
-    if (genoFile == NULL || outFile == NULL || indFile != NULL ||
+    if (genoFile == NULL || outPrefix == NULL || indFile != NULL ||
 							  markerFile != NULL) {
       if (haveGoodArgs)
 	fprintf(stderr, "\n");
-      if (outFile == NULL)
+      if (outPrefix == NULL)
 	fprintf(stderr, "ERROR: require output filenames\n");
       if (indFile != NULL || markerFile != NULL)
 	fprintf(stderr, "ERROR: for VCF input, ind and snp should not be defined\n");
@@ -245,7 +249,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     }
   }
   else if (genoFile == NULL || indFile == NULL || markerFile == NULL ||
-							     outFile == NULL) {
+							    outPrefix == NULL) {
     if (haveGoodArgs)
       fprintf(stderr, "\n");
     fprintf(stderr, "ERROR: required genotype, ind, snp, and output filenames\n");
@@ -279,7 +283,15 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     // set edgeCO if detectCO enabled but edgeCO not specified
     edgeCO = detectCO;
   else if (edgeCO > detectCO) {
-    fprintf(stderr, "ERROR: --edge_co value cannot be greater than --detect_co\n");
+    if (!detectCO)
+      fprintf(stderr, "ERROR: must enable --detect_co to use --edge_co\n");
+    else
+      fprintf(stderr, "ERROR: --edge_co value cannot be greater than --detect_co\n");
+    haveGoodArgs = false;
+  }
+
+  if (!(txtOutput || ivOutput || detectCO)) {
+    fprintf(stderr, "ERROR: must choose at least one type of results to print\n");
     haveGoodArgs = false;
   }
 
@@ -303,8 +315,10 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "%s [ARGUMENTS]\n", programName);
   fprintf(out, "\n");
   fprintf(out, "REQUIRED ARGUMENTS:\n");
-  fprintf(out, "  -o, --out <prefix>\toutput file prefix (suffix .co,.iv,.txt,.log)\n");
-  fprintf(out, " AND EITHER:\n");
+  fprintf(out, "1. OUTPUT DIRECTORY:\n");
+  fprintf(out, "  -o, --out <dir>\toutput directory (creates directory <dir> and <dir>.log)\n");
+  fprintf(out, "\n");
+  fprintf(out, "2. INPUT FILES - EITHER:\n");
   fprintf(out, "  -g, --geno <filename>\tgenotype file in PLINK BED format\n");
   fprintf(out, "  -s, --snp <filename>\tPLINK BIM file\n");
   fprintf(out, "  -i, --ind <filename>\tPLINK FAM file\n");
@@ -317,39 +331,41 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
 //  fprintf(out, "  -b, --base <prefix>\tloads <prefix>.geno, <prefix>.snp, <prefix>.ind\n");
   fprintf(out, " OR:\n");
   fprintf(out, "  -p, --plink <prefix>\tloads <prefix>.bed, <prefix>.bim, <prefix>.fam\n");
+  fprintf(out, "\n");
+  fprintf(out, "3. RESULTS TO PRINT - ONE OR MORE OF:\n");
+  fprintf(out, "  --txt\t\t\tText format haplotypes\n");
+  fprintf(out, "  --iv\t\t\tInheritance vector data in CSV format\n");
+  fprintf(out, "  --detect_co <#>\tDetect crossover events\n");
+  fprintf(out, "\t\t\tNumeric argument specifies how many informative markers\n");
+  fprintf(out, "\t\t\tmust have a switched haplotype for an event to be called\n");
+//  fprintf(out, "\t\t\tValues >=5 are recommended. Smaller values may detect\n");
+//  fprintf(out, "\t\t\tnon-crossovers or events driven by assembly errors\n");
+
   // Note: not currently supporting VCF format:
 //  fprintf(out, " OR:\n");
 //  fprintf(out, "  -v, --vcf <filename>\tbgzipped and indexed VCF file; - for stdin\n");
   fprintf(out, "\n");
   fprintf(out, "OPTIONS:\n");
-  fprintf(out, "  -c, --chr <#>\t\tonly analyze specified chromosome number\n");
-  fprintf(out, "\n");
-  fprintf(out, "  --start <#>\t\tstart position on given chromosome\n");
-  fprintf(out, "  --end <#>\t\tend position on given chromosome\n");
-  fprintf(out, "\n");
-  fprintf(out, "  --detect_co <#>\tDetect crossover events\n");
-  fprintf(out, "\t\t\tAn event is called a crossover when at least the\n");
-  fprintf(out, "\t\t\tspecified number of informative markers descend from the\n");
-  fprintf(out, "\t\t\trecombined-to haplotype.\n");
-  fprintf(out, "\t\t\tValues >=5 are recommended. Smaller values may detect\n");
-  fprintf(out, "\t\t\tnon-crossovers or events driven by assembly errors\n");
-  fprintf(out, "  --edge_co <#>\t\tUsed with --detect_co to set a different value\n");
-  fprintf(out, "\t\t\tfor establishing the \"background haplotype\" at the\n");
-  fprintf(out, "\t\t\tbeginning and end of chromosomes. At least this many\n");
-  fprintf(out, "\t\t\tinformative markers must occur for a given child before\n");
-  fprintf(out, "\t\t\tany crossovers are called. If unspecified, uses the\n");
-  fprintf(out, "\t\t\t--detect_co value; cannot be greater than this\n");
+  // TODO: -c isn't working
+//  fprintf(out, "  -c, --chr <#>\t\tonly analyze specified chromosome number\n");
+//  fprintf(out, "\n");
+//  fprintf(out, "  --start <#>\t\tstart position on given chromosome\n");
+//  fprintf(out, "  --end <#>\t\tend position on given chromosome\n");
+//  fprintf(out, "\n");
   fprintf(out, "  --no_err_max <#>\tMaximum number of recombinations attributable to a\n");
   fprintf(out, "\t\t\tsingle marker before it is called an error. Default: %d.\n",
 	  DEFAULT_NO_ERROR_MAX);
-  fprintf(out, "\t\t\tSet >=2 to detect single marker non-crossovers\n");
+  fprintf(out, "\t\t\tValues <2 call single marker non-crossovers as errors\n");
+  fprintf(out, "  --edge_co <#>\t\tAllow detection of the \"background haplotype\" with fewer\n");
+  fprintf(out, "\t\t\tthan --detect_co markers at start/end of chromosomes.\n");
+  fprintf(out, "\t\t\tA child must have a sequence of this many informative\n");
+  fprintf(out, "\t\t\tmarkers from one haplotype before calling crossovers\n");
   fprintf(out, "\n");
   // Note: not currently supporting VCF or IMPUTE2 output
 //  fprintf(out, "  --impute2\t\tprint phase results in IMPUTE2 format\n");
 //  fprintf(out, "  --vcf_out\t\toutput phase in bgzip VCF format (default for -v input)\n");
   fprintf(out, "  --force\t\tforce writing to output files (overwrite if they exist)\n");
   fprintf(out, "\n");
-  fprintf(out, "  --no_family_id\tignore family ids from PLINK .fam file --\n");
-  fprintf(out, "\t\t\tdefault PLINK ids are of the form \"family_id:person_id\"\n");
+  fprintf(out, "  --no_family_id\tignore family ids from PLINK .fam file\n");
   fprintf(out, "\n");
 }
