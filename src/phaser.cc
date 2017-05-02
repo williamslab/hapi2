@@ -614,6 +614,13 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   _hmm.addEmpty();
   dynarray<State*> &prevStates = _hmm[prevHMMIndex];
 
+  // Minimum and maximum recombination counts: for applying the optimization in
+  // rmBadStatesCheckErrorFlag().
+  // Note that the maximum value may be stale and may not be present in any
+  // state, but we track it as an optimization and avoid going through the
+  // states when this value is too low to bother.
+  uint16_t minMaxRec[2] = { UINT16_MAX, 0 };
+
   uint32_t numPrev = prevStates.length();
   int numPartial = partialStates.length();
   for(uint32_t prevIdx = 0; prevIdx < numPrev; prevIdx++) {
@@ -631,7 +638,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 	// See the code at the beginning of this function for a similar choice
 	// at the first first informative marker.
 	continue;
-      mapPrevToFull(prevState, prevIdx, curPartial, childrenData);
+      mapPrevToFull(prevState, prevIdx, curPartial, minMaxRec, childrenData);
     }
   }
 
@@ -655,24 +662,13 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 	// Set back2Idx negative and shift by 1 so that the index 0 is also
 	// negative
 	mapPrevToFull(back2State, /*prevIdx=negative=>error*/ -back2Idx-1,
-		      curPartial, childrenData);
+		      curPartial, minMaxRec, childrenData);
       }
     }
   }
 
-  // TODO: explore the optimization in which we find the state(s) with minimum
-  // recombinations and compute the difference between all other states and
-  // this state/s. If those states have more recombinations than the numbers of
-  // differences between them, remove those states.
-
-  // TODO: may be able to avoid running this if we know we didn't introduce
-  // any errors this time and we cleared the errors before
-  //
-  // If all the states have <State::error> == 2, then all paths have an error
-  // in them and this indicator isn't necessary to track. Indeed, doing so will
-  // interfere with decisions about states are equivalent, so we'll clear the
-  // flag in this case
-  checkClearErrorFlag( _hmm[ prevHMMIndex+1 ] );
+  rmBadStatesCheckErrorFlag(_hmm[ prevHMMIndex+1 ], minMaxRec,
+			    theFam->numChildren());
 }
 
 // Do the work of mapping a previous state to all states at the current as
@@ -685,7 +681,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 // if by mapping a state from two markers back to the current state with a
 // penalty term there are overall fewer recombinations).
 void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
-			   const State &curPartial,
+			   const State &curPartial, uint16_t minMaxRec[2],
 			   const uint64_t childrenData[5]) {
   // (1) For each (current) partial state, map to an initial set of full state
   // values from <prevState>. The full <iv> and <unassigned> values are
@@ -814,7 +810,7 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
 	       curPartial.hetParent, curPartial.homParentGeno,
 	       /*initParPhase=default phase=*/ 0, altPhaseType, prevIdx,
 	       prevState->minRecomb, prevState->error, onlyPIstatesPrev,
-	       hetParentUndefined, childrenData);
+	       minMaxRec, hetParentUndefined, childrenData);
 
   // For MT_PI states, have 1 or 2 more states to examine:
   // Exception is if one of the parents doesn't have any transmitted haplotypes
@@ -855,7 +851,7 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
 		 /*initParPhase=parent 0 flip=*/1,
 		 /*altPhaseType=parent 1 flip=*/ 2, prevIdx,
 		 prevState->minRecomb, prevState->error, onlyPIstatesPrev,
-		 /*hetParentUndefined=*/ false, childrenData);
+		 minMaxRec, /*hetParentUndefined=*/ false, childrenData);
   }
 }
 
@@ -1150,7 +1146,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint8_t initParPhase, uint8_t altPhaseType,
 			  int64_t prevIndex, uint16_t prevMinRecomb,
 			  uint8_t prevError, uint8_t onlyPIstatesPrev,
-			  bool hetParentUndefined,
+			  uint16_t minMaxRec[2], bool hetParentUndefined,
 			  const uint64_t childrenData[5]) {
   // How many iterations of the loop? See various comments below.
   int numIter = 2;
@@ -1298,6 +1294,11 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 	theState->prevState = -(prevIndex + 1);
 	theState->error = 1;
       }
+
+      if (totalRecombs < minMaxRec[0])
+	minMaxRec[0] = totalRecombs;
+      else if (totalRecombs > minMaxRec[1])
+	minMaxRec[1] = totalRecombs;
     }
     // Is the proposed state ambiguous with the current minimum?
     // Requires that they produce equal numbers of recombinations and:
@@ -1552,20 +1553,66 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t allAmbig,
   }
 }
 
-// See comment in caller -- makeFullStates()
-void Phaser::checkClearErrorFlag(dynarray<State*> &curStates) {
-  for(int i = 0; i < curStates.length(); i++) {
-    if (curStates[i]->error != 2) {
-      // at least one state is either an error state (newly erroneous) or
-      // is not an error at all: can't clear error flag
-      return;
+// This method does two things:
+// 1. It identifies states that are proveably suboptimal -- having more
+// recombinations than are necessary to transition to them from at least one
+// other state.
+// 2. If all the states have <State::error> == 2, then all paths have an error
+// in them and this indicator isn't necessary to track. In fact, doing so will
+// interfere with decisions about states that are equivalent, so we clear the
+// flag when all are 2.
+void Phaser::rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
+				       uint16_t minMaxRec[2], int numChildren) {
+  bool allError2 = true; // assume all states have <error> == 2 initially
+  int shiftToState = -1;
+
+  // TODO: potential optimizations:
+  // 1. If we know there are no added errors this time and that we cleared the
+  // errors in the last iteration, could avoid checking for them
+  // 2. If we know something about the <IV> of the minimum state, may be able
+  // to throw out more states -- 2 * numChildren is potentially conservative
+
+  if (minMaxRec[1] >= minMaxRec[0] + 2 * numChildren) {
+    for(int i = 0; i < curStates.length(); i++) {
+      if (curStates[i]->minRecomb >= minMaxRec[0] + 2 * numChildren) {
+	// safe to discard state <i>
+	if (shiftToState < 0) {
+	  // Will bump states up, overwritting this index
+	  shiftToState = i;
+	}
+      }
+      else if (shiftToState >= 0) {
+	curStates[shiftToState] = curStates[i];
+	shiftToState++;
+      }
+
+      if (curStates[i]->error != 2)
+	// one state that is either an error state (newly erroneous) or not an
+	// error at all: can't clear error flag
+	allError2 = false;
+    }
+
+    // Lastly must update for the fact that the list of states is now smaller
+    if (shiftToState >= 0)
+      curStates.resize(shiftToState);
+  }
+  else {
+    // no states to remove; still must to check on clearing the error flag, but
+    // if there's nothing to clear then we can optimize by returning
+    for(int i = 0; i < curStates.length(); i++) {
+      if (curStates[i]->error != 2)
+	// one state that is either an error state (newly erroneous) or not an
+	// error at all: can't clear error flag
+	return;
     }
   }
 
-  // All states have an error status of 2, can set them all to 0: there's no
-  // difference between them
-  for(int i = 0; i < curStates.length(); i++) {
-    curStates[i]->error = 0;
+  if (allError2) {
+    // All states have an error status of 2, can set them all to 0: there's no
+    // difference between them
+    for(int i = 0; i < curStates.length(); i++) {
+      curStates[i]->error = 0;
+    }
   }
 }
 

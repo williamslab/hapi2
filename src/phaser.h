@@ -87,7 +87,7 @@ class Phaser {
 			       const uint64_t childrenData[5],
 			       NuclearFamily *theFam);
     static void mapPrevToFull(const State *prevState, int64_t prevIdx,
-			      const State &curPartial,
+			      const State &curPartial, uint16_t minMaxRec[2],
 			      const uint64_t childrenData[5]);
     static void handlePI(const State *prevState, uint64_t &fullIV,
 			 uint64_t &fullAmbig, uint64_t &recombs,
@@ -119,11 +119,13 @@ class Phaser {
 			     uint8_t initParPhase, uint8_t altPhaseType,
 			     int64_t prevIndex, uint16_t prevMinRecomb,
 			     uint8_t prevError, uint8_t onlyPIstatesPrev,
-			     bool hetParentUndefined,
+			     uint16_t minMaxRec[2], bool hetParentUndefined,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
 			       const uint64_t unassigned);
-    static void checkClearErrorFlag(dynarray<State*> &curStates);
+    static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
+					  uint16_t minMaxRec[2],
+					  int numChildren);
     static void backtrace(NuclearFamily *theFam);
     static uint32_t findMinStates(dynarray<State*> &theStates);
     static void deleteStates(dynarray<State*> &theStates);
