@@ -1326,6 +1326,10 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 
       const uint32_t MAX_IDX_IN_STATE = 1 << 6;
 
+      // ambiguous for which parent is heterozygous?
+      uint8_t curHetParAmbig = theState->hetParent ^ hetParent;
+      theState->ambigParHet |= curHetParAmbig;
+
       // Have an ambiguous previous state -- add to list if one exists or
       // create one
       uint32_t prevState = (prevIndex >= 0) ? prevIndex : -(prevIndex + 1);
@@ -1338,11 +1342,14 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 	    // Can happen that <prevState> is already in the list; check whether
 	    // that's the case (will necessarily be the last element since we
 	    // consider prevStates sequentially in makeFullStates())
-	    int lastElement = _ambigPrevLists[ theState->prevState ].length() - 1;
-	    if (_ambigPrevLists[ theState->prevState ][lastElement] != prevState)
+	    int lastElement = _ambigPrevLists[theState->prevState].length() - 1;
+	    if (_ambigPrevLists[theState->prevState][lastElement] != prevState)
 	      _ambigPrevLists[ theState->prevState ].append(prevState);
 	    else
-	      theState->ambigParPhase |= 1 << curParPhase;
+	      // only ambiguous parent phase if the heterozygous parent matches
+	      // the one listed
+	      theState->ambigParPhase |= (1 - curHetParAmbig) *
+							    (1 << curParPhase);
 	  }
 	  break;
 
@@ -1368,7 +1375,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 		  break;
 		}
 		if ((curPrevs & mask) == prevState) {
-		  theState->ambigParPhase |= 1 << curParPhase;
+		  theState->ambigParPhase |= (1 - curHetParAmbig) *
+							    (1 << curParPhase);
 		  inserted = true;
 		  break;
 		}
@@ -1397,7 +1405,12 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 	case 0: // previously unambiguous
 	  {
 	    uint32_t curPrev = theState->prevState;
-	    if (curPrev < MAX_IDX_IN_STATE && prevState < MAX_IDX_IN_STATE) {
+	    if (curPrev == prevState) {
+	      theState->ambigParPhase |= (1 - curHetParAmbig) *
+							    (1 << curParPhase);
+	    }
+	    else if (curPrev < MAX_IDX_IN_STATE &&
+						prevState < MAX_IDX_IN_STATE) {
 	      // Both values fit in 6 bits, set ambiguity and add the new
 	      // previous state
 	      theState->ambigPrev = 1;
@@ -1419,9 +1432,6 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 		  theState->ambigPrev);
 	  break;
       }
-
-      // ambiguous for which parent is heterozygous?
-      theState->ambigParHet = theState->hetParent ^ hetParent;
 
       // conservatively indicate that only PI states previously occurred if all
       // previous states were PI. This is conservative in that future states
