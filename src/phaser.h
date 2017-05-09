@@ -85,10 +85,12 @@ class Phaser {
 				    const uint64_t childrenData[5]);
     static void makeFullStates(const dynarray<State> &partialStates, int marker,
 			       const uint64_t childrenData[5],
-			       NuclearFamily *theFam);
+			       bool bothParMissing, int numChildren);
+    static uint8_t isIVambigPar(const State *state, bool bothParMissing);
     static void mapPrevToFull(const State *prevState, int64_t prevIdx,
 			      const State &curPartial, uint16_t minMaxRec[2],
-			      const uint64_t childrenData[5]);
+			      const uint64_t childrenData[5],
+			      uint8_t IVambigPar);
     static void handlePI(const State *prevState, uint64_t &fullIV,
 			 uint64_t &fullAmbig, uint64_t &recombs,
 			 uint64_t parRecombs[2], uint64_t &propagateAmbig,
@@ -118,7 +120,7 @@ class Phaser {
 			     uint8_t hetParent, uint8_t homParentGeno,
 			     uint8_t initParPhase, uint8_t altPhaseType,
 			     int64_t prevIndex, uint16_t prevMinRecomb,
-			     uint8_t prevError, uint8_t onlyPIstatesPrev,
+			     uint8_t prevError, uint8_t IVambigPar,
 			     uint16_t minMaxRec[2], bool hetParentUndefined,
 			     const uint64_t childrenData[5]);
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
@@ -255,26 +257,25 @@ struct State {
   // Genotype of homozygous parent (may be missing)
   uint8_t  homParentGeno : 2;
 
+  // Ambiguous parent phase at this marker? There are four possible parent
+  // phase types, and each of the four bits in this value corresponds to one
+  // type. If the corresponding bit is set, the phase type is valid.
+  uint8_t  ambigParPhase : 4;
+
   // Four possible phase types for the parents: default heterozygous assignment
   // has allele 0 on haplotype 0 and allele 1 on haplotype 1. Can flip this
   // for each parent. Bit 0 here indicates (0 or 1) whether to flip parent 0
   // and bit 1 indicates whether to flip parent 1
   uint8_t  parentPhase : 2;
 
-  // When neither parent has data, at the beginning of a chromosome, initial PI
-  // markers in fact do not distinguish between the parents. So that the entire
-  // chromosome isn't marked ambiguous, this field is present and if set to 1,
-  // it indicates that the previous states are all PI states. The code in this
-  // case arbitrarily does not allow transitions from such states to states with
-  // parent 1 being heterozygous. This arbitrarily sets parent 0 as heterozygous
-  // at the first FI state and avoids the (already implicit and to be
-  // documented) ambiguity
-  uint8_t  onlyPIstatesPrev : 1;
-
-  // Ambiguous parent phase at this marker? There are four possible parent
-  // phase types, and each of the four bits in this value corresponds to one
-  // type. If the corresponding bit is set, the phase type is valid.
-  uint8_t  ambigParPhase : 4;
+  // Arbitrary choice for parent of origin? Occurs at the beginning of the
+  // chromosome when we don't have data for either parent. Also occurs within
+  // and just after regions where the parents transmit IV values that are either
+  // identical or exactly opposite.
+  // In practice this means arbitrarily choosing one of the parents as
+  // heterozygous at FI markers and one of two (equivalent but opposite)
+  // phase assignments for the two parents at PI markers
+  uint8_t  arbitraryPar : 1;
 
   // Ambiguous as to which parent is heterozygous?
   uint8_t  ambigParHet : 1;
