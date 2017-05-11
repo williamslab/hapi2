@@ -59,7 +59,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"chr", required_argument, NULL, 'c'},
     {"start", required_argument, NULL, START_POS},
     {"end", required_argument, NULL, END_POS},
-    {"no_error_max", required_argument, NULL, NO_ERROR_MAX},
+    {"no_err_max", required_argument, NULL, NO_ERROR_MAX},
 //    {"impute2", no_argument, &CmdLineOpts::useImpute2Format, 1},
 //    {"vcf_out", no_argument, &CmdLineOpts::vcfOutput, 1},
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
