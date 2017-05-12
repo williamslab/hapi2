@@ -14,7 +14,7 @@
 #include "phaser.h"
 #include "analysis.h"
 
-FILE *createOutDirOpenLog(char *filename);
+void createOutDir();
 bool openFilesToWrite(char *&filename, FILE *resultFiles[3], int chrIdx,
 		      const char *parentIds[2], int famIdLen, int totalFileLen,
 		      int &allocFilenameLen, FILE *log);
@@ -32,13 +32,17 @@ int main(int argc, char **argv) {
   int allocFilenameLen = prefixLen + 1024;
   char *filename = new char[ allocFilenameLen ];
 
-  FILE *log = createOutDirOpenLog(filename);
+  // open the .log file for writing
+  sprintf(filename, "%s.log", CmdLineOpts::outPrefix);
+  FILE *log = fopen(filename, "w");
+  if (!log) {
+    fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
+    perror("open");
+    exit(1);
+  }
 
-  //////////////////////////////////////////////////////////////////////////
-  // Output files don't already exist, can go forward!
-
-  // Print status to stdout and the log
-  FILE *outs[2] = {stdout, log };
+  // Get started: print status to stdout and the log
+  FILE *outs[2] = { stdout, log };
   for(int o = 0; o < 2; o++) {
     FILE *out = outs[o];
     fprintf(out, "\n");
@@ -90,6 +94,11 @@ int main(int argc, char **argv) {
 				 CmdLineOpts::noFamilyId, log,
 				 /*allowEmptyParents=*/ true,
 				 /*bulkData=*/ true);
+
+  createOutDir();
+
+  //////////////////////////////////////////////////////////////////////////
+  // Have output directory and log, can go forward!
 
   dynarray<NuclearFamily *> toBePhased;
   for(NuclearFamily::fam_ht_iter iter = NuclearFamily::familyIter();
@@ -181,9 +190,8 @@ int main(int argc, char **argv) {
   fclose(log);
 }
 
-// Creates directory that is the output prefix specified by the user and also
-// opens the log file, returning the FILE * of that file
-FILE *createOutDirOpenLog(char *filename) {
+// Creates directory that is the output prefix specified by the user
+void createOutDir() {
   // make the directory to store the output in
   if (mkdir(CmdLineOpts::outPrefix, 0777) != 0) {
     if (errno == EEXIST) {
@@ -208,17 +216,6 @@ FILE *createOutDirOpenLog(char *filename) {
       exit(1);
     }
   }
-
-  // open the .log file for writing
-  sprintf(filename, "%s.log", CmdLineOpts::outPrefix);
-  FILE *log = fopen(filename, "w");
-  if (!log) {
-    fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
-    perror("open");
-    exit(1);
-  }
-
-  return log;
 }
 
 // Attempts to open the files to be printed to, and alerts the user if any
