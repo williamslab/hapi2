@@ -123,6 +123,8 @@ class Phaser {
 			     uint8_t prevError, uint8_t IVambigPar,
 			     uint16_t minMaxRec[2], bool hetParentUndefined,
 			     const uint64_t childrenData[5]);
+    static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
+					      uint8_t &hetParIsDiff);
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
 			       const uint64_t unassigned);
     static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
@@ -255,6 +257,9 @@ struct State {
   uint8_t  hetParent : 2;
 
   // Genotype of homozygous parent (may be missing)
+  // TODO: this no longer fits in 4 words, could put this elsewhere (no reason
+  // for every state to have it)
+  // Or remove a bit from minRecomb
   uint8_t  homParentGeno : 2;
 
   // Ambiguous parent phase at this marker? There are four possible parent
@@ -278,7 +283,7 @@ struct State {
   uint8_t  arbitraryPar : 1;
 
   // Ambiguous as to which parent is heterozygous?
-  uint8_t  ambigParHet : 1;
+  uint8_t  ambigParHet : 2;
 
   // Ambiguous previous state? If this value is 1, then <prevState> stores
   // in every 6 bits starting from the lowest order bits, the indexes to
@@ -296,5 +301,28 @@ struct State {
   // state allows us to prefer non-error state paths when there are ambiguities
   uint8_t  error : 2;
 };
+
+// Returns which bits differ between hetPar1 and hetPar2, with the value always
+// being 2 if they differ and one of <hetPar*> == 2. Thus, the value indicate
+// whether one of the values is both parent het and the other has only one
+// parent het. It also indicates when the values differ in being one parent het
+// for different parents.
+// <HetParIsDiff> is a value assigned by this method and is a binary indicator 
+// for whether the two states have different <hetParent> values (i.e., for
+// whether the return value is non-zero).
+uint8_t Phaser::calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
+				    uint8_t &hetParIsDiff) {
+  uint8_t hetParDiff = hetPar1 ^ hetPar2;
+  hetParIsDiff = (hetParDiff & 1) | (hetParDiff >> 1);
+  // When one of the <hetParent> values is 2 and the other is not, we
+  // want to indicate this in <curAmbigParHet> with bit 1 set (i.e.,
+  // binary 2). The next section of code does this.
+  // Note that when neither <hetParent> values are 2, a difference
+  // between them will always set bit 0 in <hetParDiff> which is what
+  // we cant in <curAmbigParHet>
+  uint8_t either2 = (hetPar1 | hetPar2) >> 1;
+
+  return hetParIsDiff * (either2 * 2 + (1 - either2) * hetParDiff);
+}
 
 #endif // PHASER_H
