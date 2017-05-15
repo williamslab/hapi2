@@ -355,7 +355,7 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "  --no_err_max <#>\tMaximum number of recombinations attributable to a\n");
   fprintf(out, "\t\t\tsingle marker before it is called an error. Default: %d.\n",
 	  DEFAULT_NO_ERROR_MAX);
-  fprintf(out, "\t\t\tValues <2 call single marker non-crossovers as errors\n");
+  fprintf(out, "\t\t\t0 disables; 1 calls single marker non-crossovers errors\n");
   fprintf(out, "  --edge_co <#>\t\tAllow detection of the \"background haplotype\" with fewer\n");
   fprintf(out, "\t\t\tthan --detect_co markers at start/end of chromosomes.\n");
   fprintf(out, "\t\t\tA child must have a sequence of this many informative\n");
