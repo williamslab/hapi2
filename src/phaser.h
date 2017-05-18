@@ -133,7 +133,10 @@ class Phaser {
     static void backtrace(NuclearFamily *theFam);
     static uint32_t findMinStates(dynarray<State*> &theStates);
     static void deleteStates(dynarray<State*> &theStates);
-    static uint32_t collectAmbigPrevIdxs(State *fromState, bool insertFirst);
+    static uint8_t propagateBackIV(State *curState, State *prevState);
+    static uint8_t collectAmbigPrevIdxs(State *curState,
+					dynarray<State*> &prevStates,
+					uint32_t &prevStateIdx);
 
 
     //////////////////////////////////////////////////////////////////
