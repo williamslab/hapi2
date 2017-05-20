@@ -1925,6 +1925,7 @@ uint8_t Phaser::collectAmbigPrevIdxs(State *curState,
 	uint32_t prevs = curState->prevState;
 	// Set the first index as the (default) previous state
 	thePrevStateIdx = prevs & mask;
+	_prevIdxSet->insert( thePrevStateIdx );
 	prevs >>= 6;
 	maxNumRecombs = propagateBackIV(curState, prevStates[ thePrevStateIdx]);
 	for(int shift = 6; shift < 30; shift += 6) {
@@ -1942,6 +1943,7 @@ uint8_t Phaser::collectAmbigPrevIdxs(State *curState,
       {
 	dynarray<uint32_t> &prevs = _ambigPrevLists[curState->prevState];
 	thePrevStateIdx = prevs[0];
+	_prevIdxSet->insert( thePrevStateIdx );
 	maxNumRecombs = propagateBackIV(curState, prevStates[ thePrevStateIdx]);
 	for(int i = 1; i < prevs.length(); i++) {
 	  uint32_t curPrevIdx = prevs[i];
