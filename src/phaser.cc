@@ -1910,8 +1910,6 @@ uint8_t Phaser::collectAmbigPrevIdxs(State *curState,
 				     dynarray<State*> &prevStates,
 				     uint32_t &thePrevStateIdx) {
   const uint32_t mask = (1 << 6) - 1;
-  // TODO! select the desired previous state as one with maximum number of
-  // recombinations
   uint8_t maxNumRecombs;
 
   switch (curState->ambigPrev) {
@@ -1931,7 +1929,12 @@ uint8_t Phaser::collectAmbigPrevIdxs(State *curState,
 	for(int shift = 6; shift < 30; shift += 6) {
 	  uint32_t curPrevIdx = prevs & mask;
 	  _prevIdxSet->insert( curPrevIdx );
-	  propagateBackIV(curState, prevStates[ curPrevIdx ]);
+	  uint8_t curNumRecombs = propagateBackIV(curState,
+						  prevStates[ curPrevIdx ]);
+	  if (curNumRecombs > maxNumRecombs) {
+	    maxNumRecombs = curNumRecombs;
+	    thePrevStateIdx = curPrevIdx;
+	  }
 	  prevs >>= 6;
 	  if (prevs == 0)
 	    break; // got to last previous index
@@ -1948,7 +1951,12 @@ uint8_t Phaser::collectAmbigPrevIdxs(State *curState,
 	for(int i = 1; i < prevs.length(); i++) {
 	  uint32_t curPrevIdx = prevs[i];
 	  _prevIdxSet->insert( curPrevIdx );
-	  propagateBackIV(curState, prevStates[ curPrevIdx ]);
+	  uint8_t curNumRecombs = propagateBackIV(curState,
+						  prevStates[ curPrevIdx ]);
+	  if (curNumRecombs > maxNumRecombs) {
+	    maxNumRecombs = curNumRecombs;
+	    thePrevStateIdx = curPrevIdx;
+	  }
 	}
       }
       break;
