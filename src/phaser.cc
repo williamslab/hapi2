@@ -1876,11 +1876,12 @@ uint8_t Phaser::propagateBackIV(State *curState, State *prevState) {
   // Ambig1 ambiguities are always resolved; the issue with them has to do with
   // counting of recombinations when there were undefined <iv> values before
   // encountering a PI state in which the relevant sample is heterozygous.
-  uint64_t oneRecomb = preRecombs[0] ^ parRecombs[1];
-  prevState->ambig = prevStdAmbig & oneRecomb;
+  // TODO: optimization -- test this:
+//  uint64_t oneRecomb = parRecombs[0] ^ parRecombs[1];
+//  prevState->ambig = prevStdAmbig & oneRecomb;
   // old less efficient version of updating <prevState->ambig>
-//  uint64_t noRecomb = ambigToResolve - (parRecombs[0] | parRecombs[1]);
-//  prevState->ambig &= ~(bothRecomb | noRecomb | prevAmbig1);
+  uint64_t noRecomb = ambigToResolve - (parRecombs[0] | parRecombs[1]);
+  prevState->ambig &= ~(bothRecomb | noRecomb | prevAmbig1);
 
   // Return number of recombinations
   // Note: this number may be off by 1 for any ambig1 values. If we end up
