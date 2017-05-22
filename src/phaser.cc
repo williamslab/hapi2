@@ -507,7 +507,8 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     // parent is homozygous for allele 1, the heterozygous children will have
     // received haplotype 0 from the heterozygous parent, and the homozygous
     // children received allele 1 from this parent. So:
-    static_assert(G_HOM1 == 3 && G_HOM0 == 0); // assuming this below
+    // Assuming the following below:
+    static_assert(G_HOM1 == 3 && G_HOM0 == 0, "genotype encoding non-standard");
     // Following always holds; commented out to improve efficiency:
 //    assert(homParGeno == G_HOM0 || homParGeno == G_HOM1);
     uint8_t homParAll1 = homParGeno & 1; // binary: homozy parent have allele 1?

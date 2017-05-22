@@ -20,7 +20,7 @@ endif
 
 CPPFLAGS = -std=c++11 $(CFLAGS)
 
-LIBS = -lgenetio -lz -lhts
+LIBS = -lgenetio -lz -lhts -lpthread
 
 # dependency variables / commands
 DEPDIR = .deps
