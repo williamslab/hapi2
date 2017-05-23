@@ -156,7 +156,7 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
   // Finally report any recombinations at the end of the chromosome. Any with
   // more than CmdLineOpts::edgeCO informative sites observed suffice
   for(int p = 0; p < 2; p++) {
-    for(itr = _recombs[p].begin(); itr != _recombs[p].end(); ) {
+    for(itr = _recombs[p].begin(); itr != _recombs[p].end(); itr++) {
       if (itr->numObs >= CmdLineOpts::edgeCO) {
 	// Valid crossover! print the info
 	printCO(itr, out, p, theFam, chrName, firstMarker);
