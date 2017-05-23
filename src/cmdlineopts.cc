@@ -270,7 +270,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
   if (startPos && !onlyChr) {
     if (haveGoodArgs)
       fprintf(stderr, "\n");
-    fprintf(stderr, "WARNING: using starting position, without specified chromosome\n");
+    fprintf(stderr, "WARNING: using starting position without specified chromosome\n");
   }
   if (endPosSet && !startPos) {
     if (haveGoodArgs)
@@ -316,10 +316,12 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "\n");
   fprintf(out, "REQUIRED ARGUMENTS:\n");
   fprintf(out, "1. OUTPUT DIRECTORY:\n");
-  fprintf(out, "  -o, --out <dir>\toutput directory (creates directory <dir> and <dir>.log)\n");
+  fprintf(out, "  -o, --out <dir>\tOutput directory (creates directory <dir> and <dir>.log)\n");
   fprintf(out, "\n");
   fprintf(out, "2. INPUT FILES - EITHER:\n");
-  fprintf(out, "  -g, --geno <filename>\tgenotype file in PLINK BED format\n");
+  fprintf(out, "  -p, --plink <prefix>\tLoads <prefix>.bed, <prefix>.bim, <prefix>.fam\n");
+  fprintf(out, " OR:\n");
+  fprintf(out, "  -g, --geno <filename>\tGenotype file in PLINK BED format\n");
   fprintf(out, "  -s, --snp <filename>\tPLINK BIM file\n");
   fprintf(out, "  -i, --ind <filename>\tPLINK FAM file\n");
   // Note: not currently supporting EIGENSTRAT or packed ancestry map format:
@@ -329,8 +331,6 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
 //  fprintf(out, "  -i, --ind <filename>\tindividual file or PLINK FAM file\n");
 //  fprintf(out, " OR:\n");
 //  fprintf(out, "  -b, --base <prefix>\tloads <prefix>.geno, <prefix>.snp, <prefix>.ind\n");
-  fprintf(out, " OR:\n");
-  fprintf(out, "  -p, --plink <prefix>\tloads <prefix>.bed, <prefix>.bim, <prefix>.fam\n");
   fprintf(out, "\n");
   fprintf(out, "3. RESULTS TO PRINT - ONE OR MORE OF:\n");
   fprintf(out, "  --txt\t\t\tText format haplotypes\n");
@@ -346,12 +346,10 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
 //  fprintf(out, "  -v, --vcf <filename>\tbgzipped and indexed VCF file; - for stdin\n");
   fprintf(out, "\n");
   fprintf(out, "OPTIONS:\n");
-  // TODO: -c isn't working
-//  fprintf(out, "  -c, --chr <#>\t\tonly analyze specified chromosome number\n");
-//  fprintf(out, "\n");
-//  fprintf(out, "  --start <#>\t\tstart position on given chromosome\n");
-//  fprintf(out, "  --end <#>\t\tend position on given chromosome\n");
-//  fprintf(out, "\n");
+  fprintf(out, "  -c, --chr <string>\tOnly analyze specified chromosome\n");
+  fprintf(out, "  --start <#>\t\tstart position on given chromosome\n");
+  fprintf(out, "  --end <#>\t\tend position on given chromosome\n");
+  fprintf(out, "\n");
   fprintf(out, "  --no_err_max <#>\tMaximum number of recombinations attributable to a\n");
   fprintf(out, "\t\t\tsingle marker before it is called an error. Default: %d.\n",
 	  DEFAULT_NO_ERROR_MAX);
@@ -364,8 +362,8 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   // Note: not currently supporting VCF or IMPUTE2 output
 //  fprintf(out, "  --impute2\t\tprint phase results in IMPUTE2 format\n");
 //  fprintf(out, "  --vcf_out\t\toutput phase in bgzip VCF format (default for -v input)\n");
-  fprintf(out, "  --force\t\tforce writing to output files (overwrite if they exist)\n");
+  fprintf(out, "  --force\t\tForce writing to output files (overwrite if they exist)\n");
   fprintf(out, "\n");
-  fprintf(out, "  --no_family_id\tignore family ids from PLINK .fam file\n");
+  fprintf(out, "  --no_family_id\tIgnore family ids from PLINK .fam file\n");
   fprintf(out, "\n");
 }
