@@ -1657,6 +1657,11 @@ void Phaser::rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 void Phaser::backtrace(NuclearFamily *theFam) {
   int lastIndex = _hmm.length() - 1;
 
+  if (lastIndex < 0)
+    // no data: done (can happen if the children are missing data almost
+    // everywhere and the marker is ambiguous)
+    return;
+
   uint32_t curStateIdx = findMinStates(_hmm[lastIndex]);
   uint32_t prevStateIdx = UINT32_MAX;
   // Number of recombinations in <curState> relative to <prevState> below
@@ -1719,20 +1724,22 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 	continue;
 
       int prevHmmIndex = hmmIndex - 1 - (curState->error & 1);
-      if (!ambigState->ambigPrev) {
-	uint32_t thePrevIdx = ambigState->prevState;
-	_prevIdxSet->insert(thePrevIdx); // only one
-	// Note: we call this here and in collectAmbigPrevIdxs() to facilitate
-	// properly calculating <ivFlippable>. Without this, states that have
-	// ambiguous IV values can be such that both <IV> values are uncertain
-	// when only one is (or even that the opposite parent is uncertain
-	// relative to the true one [at least in principle this could happen])
-	propagateBackIV(ambigState,
-			/*prevState=*/ _hmm[prevHmmIndex][thePrevIdx]);
-      }
-      else {
-	uint32_t dontcare;
-	collectAmbigPrevIdxs(ambigState, _hmm[prevHmmIndex], dontcare);
+      if (prevHmmIndex >= 0) {
+	if (!ambigState->ambigPrev) {
+	  uint32_t thePrevIdx = ambigState->prevState;
+	  _prevIdxSet->insert(thePrevIdx); // only one
+	  // Note: we call this here and in collectAmbigPrevIdxs() to facilitate
+	  // properly calculating <ivFlippable>. Without this, states that have
+	  // ambiguous IV values can be such that both <IV> values are uncertain
+	  // when only one is (or even that the opposite parent is uncertain
+	  // relative to the true one [at least in principle this could happen])
+	  propagateBackIV(ambigState,
+			  /*prevState=*/ _hmm[prevHmmIndex][thePrevIdx]);
+	}
+	else {
+	  uint32_t dontcare;
+	  collectAmbigPrevIdxs(ambigState, _hmm[prevHmmIndex], dontcare);
+	}
       }
     }
 
