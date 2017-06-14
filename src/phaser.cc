@@ -1755,7 +1755,7 @@ void Phaser::backtrace(NuclearFamily *theFam) {
       // need deal with curState->error == 1:
       if (curState->error & 1) {
 	// Set error for immediately previous marker.
-	uint64_t childrenData = _genos[curHmmIndex].second;
+	uint64_t childrenData = _genos[hmmIndex-1].second;
 	uint64_t missing = (childrenData & _parBits[0]) &
 					  ~((childrenData & _parBits[1]) >> 1);
 	theFam->setStatus(/*marker=*/ _hmmMarker[hmmIndex-1], PHASE_ERR_RECOMB,
