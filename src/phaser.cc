@@ -1674,20 +1674,23 @@ void Phaser::rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
     for(int i = 0; i < curStates.length(); i++) {
       if (curStates[i]->minRecomb >= minMaxRec[0] + 2 * numChildren) {
 	// safe to discard state <i>
+	delete curStates[i];
 	if (shiftToState < 0) {
 	  // Will bump states up, overwritting this index
 	  shiftToState = i;
 	}
       }
-      else if (shiftToState >= 0) {
-	curStates[shiftToState] = curStates[i];
-	shiftToState++;
-      }
+      else {
+	if (shiftToState >= 0) {
+	  curStates[shiftToState] = curStates[i];
+	  shiftToState++;
+	}
 
-      if (curStates[i]->error != 2)
-	// one state that is either an error state (newly erroneous) or not an
-	// error at all: can't clear error flag
-	allError2 = false;
+	if (curStates[i]->error != 2)
+	  // one state that is either an error state (newly erroneous) or not an
+	  // error at all: can't clear error flag
+	  allError2 = false;
+      }
     }
 
     // Lastly must update for the fact that the list of states is now smaller

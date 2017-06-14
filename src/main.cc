@@ -188,6 +188,11 @@ int main(int argc, char **argv) {
   fprintf(log, "\n");
 
   fclose(log);
+
+//  Marker::cleanUp();
+//  PersonIO<PersonBulk>::cleanUp();
+//  NuclearFamily::cleanUp();
+//  delete [] filename;
 }
 
 // Creates directory that is the output prefix specified by the user
