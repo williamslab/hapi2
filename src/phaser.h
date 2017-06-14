@@ -37,6 +37,34 @@ enum MarkerType {
 
 struct State;
 
+// During backtracing, when multiple states lead to the same number of
+// recombinations, we'd like to identify which inheritance vector values are
+// uncertain. We do this by tracking the inheritance vector <iv> and ambiguous
+// bits <ambig> that apply to each state at the previous or current maker
+// (stored in <_curBTAmbigSet> and <_prevBTAmbigSet>) -- thus <stateIdx> is
+// an index into the list of states in <_hmm> for the corresponding marker,
+// whether that referred to by _cur* or _prev*.
+// Storing these values allows us to diff (using bitwise xor) the <iv> values
+// among all the states. Note that an advantage of storing these values separate
+// from the states themselves is that multiple paths that lead to the same state
+// but yield different propagated values are possible to store with this.
+// An alternative, heavier-weight solution would be to make separate full States
+// during back tracing, but the only differing values are those stored here, so
+// this suffices. It's also immediately apparent when two paths coalesce on the
+// same values since we use sets to store the objects.
+struct BT_ambig_info {
+  BT_ambig_info() { }
+  BT_ambig_info(uint32_t s, uint64_t i, uint64_t a) {
+    stateIdx = s;
+    iv = i;
+    ambig = a;
+  }
+  uint32_t stateIdx;
+  uint64_t iv;
+  uint64_t ambig;
+};
+
+
 class Phaser {
   public:
     //////////////////////////////////////////////////////////////////
@@ -46,10 +74,14 @@ class Phaser {
     static void init() {
       // TODO: optimization: set load factors for these next values?
       _stateHash.set_empty_key(NULL);
-      _curIdxSet = new state_idx_set();
-      _prevIdxSet = new state_idx_set();
-      _curIdxSet->set_empty_key(UINT32_MAX);
-      _prevIdxSet->set_empty_key(UINT32_MAX);
+      _curBTAmbigSet = new BT_state_set();
+      _prevBTAmbigSet = new BT_state_set();
+      // TODO: would using pointers make this faster?
+      // Note that this value is impossible as <State::iv> will always have
+      // pairs of bits set instead of just 1 as here:
+      BT_ambig_info empty(UINT32_MAX, UINT64_MAX, 1);
+      _curBTAmbigSet->set_empty_key(empty);
+      _prevBTAmbigSet->set_empty_key(empty);
 
       int maxMarkers = 0;
       for(int c = 0; c < Marker::getNumChroms(); c++)
@@ -133,10 +165,13 @@ class Phaser {
     static void backtrace(NuclearFamily *theFam);
     static uint32_t findMinStates(dynarray<State*> &theStates);
     static void deleteStates(dynarray<State*> &theStates);
-    static uint8_t propagateBackIV(State *curState, State *prevState);
-    static uint8_t collectAmbigPrevIdxs(State *curState,
-					dynarray<State*> &prevStates,
-					uint32_t &prevStateIdx);
+    static void propagateBackIV(uint64_t curIV, uint64_t curAmbig,
+				State *prevState, uint64_t &newPrevIV,
+				uint64_t &newPrevAmbig);
+    static void collectAmbigPrevIdxs(uint64_t curIV, uint64_t curAmbig,
+				     uint8_t ambigPrev, uint32_t prevState,
+				     const dynarray<State*> &prevStates,
+				     BT_ambig_info &thePrevInfo);
 
 
     //////////////////////////////////////////////////////////////////
@@ -182,17 +217,30 @@ class Phaser {
     typedef typename state_ht::const_iterator state_ht_iter;
     static state_ht _stateHash;
 
-    struct eq_uint32 {
-      bool operator()(const uint32_t k1, const uint32_t k2) const {
-	return k1 == k2;
+    // for back tracing; see comment about struct BT_ambig_info declaration
+    struct hashBTinfo {
+      size_t operator()(BT_ambig_info const key) const {
+	// make a better hash function?
+	return std::tr1::hash<uint32_t>{}(key.stateIdx) +
+	       std::tr1::hash<uint64_t>{}(key.iv) +
+	       // during back tracing, most ambig bits will be 0 so won't
+	       // really distinguish them, so we won't hash but use the raw
+	       // value:
+	       key.ambig;
       }
     };
-    typedef typename google::dense_hash_set<uint32_t, std::tr1::hash<uint32_t>,
-					    eq_uint32> state_idx_set;
-    typedef typename state_idx_set::const_iterator state_set_iter;
+    struct eqBTinfo {
+      bool operator()(const BT_ambig_info k1, const BT_ambig_info k2) const {
+	return k1.stateIdx == k2.stateIdx && k1.iv == k2.iv &&
+	       k1.ambig == k2.ambig;
+      }
+    };
+    typedef typename google::dense_hash_set<BT_ambig_info,
+					    hashBTinfo, eqBTinfo> BT_state_set;
+    typedef typename BT_state_set::const_iterator state_set_iter;
     // For when there are ambiguous previous states
-    static state_idx_set *_curIdxSet;
-    static state_idx_set *_prevIdxSet;
+    static BT_state_set *_curBTAmbigSet;
+    static BT_state_set *_prevBTAmbigSet;
 
     // Inheritance vector bits corresponding to parent 0 and 1 (indexed).
     // Index 2 corresponds to all inheritance vector bits set to 1.
@@ -249,32 +297,54 @@ struct State {
   // the capacity here? Unlikely to be more than 2^32 states but could check
   uint32_t prevState;
 
+  // Ambiguous previous state? If this value is 1, then <prevState> stores
+  // in every 6 bits starting from the lowest order bits, the indexes to
+  // the ambiguous previous states.
+  // This value is 2 whenever there are more than 32 / 6 == 5 ambiguous
+  // previous states or if the index of any previous states is >=2^6 == 64,
+  // the previous states are stored in a list inside <_ambigPrevLists> with
+  // the value <prevState> being an index into that list.
+  uint8_t  ambigPrev;  // fits in 2 bits
+
   // Minimum number of recombinations to reach this state
   // TODO: add checks to ensure we never reach UINT16_MAX?
   uint16_t minRecomb;
 
-  // TODO: optimization: any faster to use full uint8_t values?
+  // We prefer to back trace to states that have recombinations immediately
+  // before the current state as opposed to earlier. In general this decision
+  // doesn't matter much since we track ambiguous <iv> values (see <ivFlippable>
+  // in the backtrace() method).
+  // Note: will not ever get more than 64 recombinations from the previous
+  // marker since there are 64 bits in <iv>, so cannot exceed UINT8_MAX
+  uint8_t  maxPrevRecomb;
 
   // Which parent is heterozygous? Either 0, 1, or 2 for both, which corresponds
   // to MT_PI states
-  uint8_t  hetParent : 2;
+  uint8_t  hetParent;  // fits in 2 bits
+
+  // Ambiguous as to which parent is heterozygous?
+  // Each bit corresponds to a value of <hetParent>, which takes on values 0,1,2
+  // If the corresponding bit is set to 1, it's possible for the state to have
+  // the indicated <hetParent> value.
+  uint8_t  ambigParHet;  // fits in 3 bits
 
   // Genotype of homozygous parent (may be missing)
-  // TODO: this no longer fits in 4 words, could put this elsewhere (no reason
-  // for every state to have it)
-  // Or remove a bit from minRecomb
-  uint8_t  homParentGeno : 2;
-
-  // Ambiguous parent phase at this marker? There are four possible parent
-  // phase types, and each of the four bits in this value corresponds to one
-  // type. If the corresponding bit is set, the phase type is valid.
-  uint8_t  ambigParPhase : 4;
+  uint8_t  homParentGeno;  // fits in 2 bits
 
   // Four possible phase types for the parents: default heterozygous assignment
   // has allele 0 on haplotype 0 and allele 1 on haplotype 1. Can flip this
   // for each parent. Bit 0 here indicates (0 or 1) whether to flip parent 0
   // and bit 1 indicates whether to flip parent 1
-  uint8_t  parentPhase : 2;
+  uint8_t  parentPhase;  // fits in 2 bits
+
+  // Ambiguous parent phase at this marker? Because <hetParent> is subject to
+  // change depending on the previous state (only when there is ambiguity),
+  // we track three sets of values, stored sequentially. <hetParent> == 0 are
+  // stored in bits 0 & 1, <hetParent> == 1 are in bits 2 & 3, and
+  // <hetParent> == 2 are in bits 4-7. There are 2^H possible phase types where
+  // H is the number of heterozygous parents. If the corresponding bit is set,
+  // the phase type is valid.
+  uint8_t  ambigParPhase;  // requires 8 bits
 
   // Arbitrary choice for parent of origin? Occurs at the beginning of the
   // chromosome when we don't have data for either parent. Also occurs within
@@ -283,49 +353,14 @@ struct State {
   // In practice this means arbitrarily choosing one of the parents as
   // heterozygous at FI markers and one of two (equivalent but opposite)
   // phase assignments for the two parents at PI markers
-  uint8_t  arbitraryPar : 1;
-
-  // Ambiguous as to which parent is heterozygous?
-  uint8_t  ambigParHet : 2;
-
-  // Ambiguous previous state? If this value is 1, then <prevState> stores
-  // in every 6 bits starting from the lowest order bits, the indexes to
-  // the ambiguous previous states.
-  // This value is 2 whenever there are more than 32 / 6 == 5 ambiguous
-  // previous states or if the index of any previous states is >=2^6 == 64,
-  // the previous states are stored in a list inside <_ambigPrevLists> with
-  // the value <prevState> being an index into that list.
-  uint8_t  ambigPrev : 2;
+  uint8_t  arbitraryPar;  // fits in 1 bit
 
   // Error state? Used in the context of <CmdLineOpts::max1MarkerRecomb>
   // A value of 1 means <this> is an error state.
   // A value of 2 means that some previous state leading to this one is an
   // error state. Tracking whether some state leading to this one is an error
   // state allows us to prefer non-error state paths when there are ambiguities
-  uint8_t  error : 2;
+  uint8_t  error;  // fits in 2 bits
 };
-
-// Returns which bits differ between hetPar1 and hetPar2, with the value always
-// being 2 if they differ and one of <hetPar*> == 2. Thus, the value indicate
-// whether one of the values is both parent het and the other has only one
-// parent het. It also indicates when the values differ in being one parent het
-// for different parents.
-// <HetParIsDiff> is a value assigned by this method and is a binary indicator 
-// for whether the two states have different <hetParent> values (i.e., for
-// whether the return value is non-zero).
-uint8_t Phaser::calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
-				    uint8_t &hetParIsDiff) {
-  uint8_t hetParDiff = hetPar1 ^ hetPar2;
-  hetParIsDiff = (hetParDiff & 1) | (hetParDiff >> 1);
-  // When one of the <hetParent> values is 2 and the other is not, we
-  // want to indicate this in <curAmbigParHet> with bit 1 set (i.e.,
-  // binary 2). The next section of code does this.
-  // Note that when neither <hetParent> values are 2, a difference
-  // between them will always set bit 0 in <hetParDiff> which is what
-  // we cant in <curAmbigParHet>
-  uint8_t either2 = (hetPar1 | hetPar2) >> 1;
-
-  return hetParIsDiff * (either2 * 2 + (1 - either2) * hetParDiff);
-}
 
 #endif // PHASER_H
