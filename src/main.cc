@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
 
     // Phase the current family on each chromosome successively and print
     // the results the user requested
-    theFam->initFam();
+    theFam->initPhase();
     for(int chrIdx = 0; chrIdx < numChrs; chrIdx++) {
       FILE *resultsFiles[3];
       bool shouldPhase = openFilesToWrite(filename, resultsFiles, chrIdx,
@@ -175,6 +175,7 @@ int main(int argc, char **argv) {
 	fclose(resultsFiles[2]);
       }
     }
+    theFam->deletePhase();
 
     numFinished++;
   }
