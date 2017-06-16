@@ -315,10 +315,7 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "%s [ARGUMENTS]\n", programName);
   fprintf(out, "\n");
   fprintf(out, "REQUIRED ARGUMENTS:\n");
-  fprintf(out, "1. OUTPUT DIRECTORY:\n");
-  fprintf(out, "  -o, --out <dir>\tOutput directory (creates directory <dir> and <dir>.log)\n");
-  fprintf(out, "\n");
-  fprintf(out, "2. INPUT FILES - EITHER:\n");
+  fprintf(out, "1. INPUT FILES - EITHER:\n");
   fprintf(out, "  -p, --plink <prefix>\tLoads <prefix>.bed, <prefix>.bim, <prefix>.fam\n");
   fprintf(out, " OR:\n");
   fprintf(out, "  -g, --geno <filename>\tGenotype file in PLINK BED format\n");
@@ -331,6 +328,9 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
 //  fprintf(out, "  -i, --ind <filename>\tindividual file or PLINK FAM file\n");
 //  fprintf(out, " OR:\n");
 //  fprintf(out, "  -b, --base <prefix>\tloads <prefix>.geno, <prefix>.snp, <prefix>.ind\n");
+  fprintf(out, "\n");
+  fprintf(out, "2. OUTPUT DIRECTORY:\n");
+  fprintf(out, "  -o, --out <dir>\tOutput directory (creates directory <dir> and <dir>.log)\n");
   fprintf(out, "\n");
   fprintf(out, "3. RESULTS TO PRINT - ONE OR MORE OF:\n");
   fprintf(out, "  --txt\t\t\tText format haplotypes\n");
