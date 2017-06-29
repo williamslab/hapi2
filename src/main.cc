@@ -265,6 +265,8 @@ bool openFilesToWrite(char *&filename, FILE *resultsFiles[3], int chrIdx,
 	  fprintf(log, "open: %s\n", strerror(errno));
 	}
       }
+      else
+	resultsFiles[o] = NULL;
     }
   }
 
