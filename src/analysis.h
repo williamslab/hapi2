@@ -42,11 +42,6 @@ class Analysis {
     // (indexed) that are upstream of the current position in an analysis
     static dynarray<int> _informMarkers[2];
 
-    // Parallel array (technically arrays for the first index) with
-    // <_informMarkers> that stores the <phase.ambigMiss> value corresponding
-    // to the given informative marker
-    static dynarray<uint64_t> _ambigMiss[2];
-
     // Number of consistent informative markers observed for each parent/child
     // combination. This is only relevant at the beginning of the chromosome
     // where we are trying to establish what the background haplotype is. When

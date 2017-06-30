@@ -10,7 +10,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 // initialize static members
 dynarray<int>      Analysis::_informMarkers[2];
-dynarray<uint64_t> Analysis::_ambigMiss[2];
 dynarray<int>      Analysis::_numInformForChild[2];
 std::list<Recomb>  Analysis::_recombs[2];
 
@@ -33,6 +32,7 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
   std::list<Recomb>::iterator itr;
   bool informSeen = false;
   uint64_t prevIV = 0;
+  uint64_t prevIVUnassigned = UINT64_MAX;
   // confidently know starting haplotypes for each parent?
   bool allChildrenSolid[2] = { false, false };
 
@@ -52,7 +52,12 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
       int endP = isPI * 1 + (1-isPI) * startP;
 
       if (informSeen) {
-	uint64_t recombs = prevIV ^ phase.iv;
+	// which haplotypes recombined? Will only inspect those where the
+	// IV value is fixed in the state -- that is, bits where ivFlippable ==0
+	// -- and where the IV has an assigned value -- that is, we've
+	// encountered a state where the corresponding bit in ivFlippable == 0
+	uint64_t recombs = (prevIV ^ phase.iv) &
+					~(phase.ivFlippable | prevIVUnassigned);
 
 	for(int p = startP; p <= endP; p++) {
 	  for(itr = _recombs[p].begin(); itr != _recombs[p].end(); ) {
@@ -130,14 +135,14 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
       // Update various state for next marker
       for(int p = startP; p <= endP; p++) {
 	_informMarkers[p].append(marker);
-	_ambigMiss[p].append(phase.ambigMiss);
 	if (!allChildrenSolid[p]) {
 	  bool haveNonSolid = false; // for updating allChildrenSolid
 	  // increment counts of children's informative 
 	  for(int c = 0; c < numChildren; c++) {
 	    // Note: we reset the count to 0 above whenever a child recombines
 	    // early on on the chromosome (i.e., before allChildrenSolid[p])
-	    if ( ((phase.ambigMiss >> (2 * c)) & 1) == 0 ) { // non-missing?
+	    if ( ((phase.ambigMiss >> (2 * c)) & 1) == 0 && // non-missing?
+		 ((phase.ivFlippable >> (2 * c + p)) & 1) == 0 ) { // non-flippable?
 	      _numInformForChild[p][c]++;
 	      if (_numInformForChild[p][c] < CmdLineOpts::edgeCO)
 		haveNonSolid = true;
@@ -148,7 +153,13 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
 	  allChildrenSolid[p] = !haveNonSolid;
 	}
       }
-      prevIV = phase.iv;
+      // We'll propagate forward the IV value for bits that are flippable at the
+      // current marker. Also update unassigned bits: they are those for which
+      // all previous markers have had ivFlippable = 1
+      prevIV &= phase.ivFlippable;
+      prevIV |= phase.iv & ~phase.ivFlippable;
+      prevIVUnassigned &= phase.ivFlippable;
+
       informSeen = true;
     }
   }
@@ -168,7 +179,6 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
   for(int p = 0; p < 2; p++) {
     _recombs[p].clear();
     _informMarkers[p].clear();
-    _ambigMiss[p].clear();
   }
 }
 
@@ -180,21 +190,35 @@ void Analysis::printCO(std::list<Recomb>::iterator record, FILE *out, int p,
   int numChildren = theFam->_children.length();
 
   // First narrow down where the previous informative marker was -- child must
-  // have non-missing data
+  // have non-missing data and their inheritance vector must be non-flippable
   int prevInfIdx = record->prevInfIdx;
   int childBit = 2 * record->child;
-  while( (_ambigMiss[p][prevInfIdx] >> childBit) & 1 ) {//missing?
+  int parMask = 1 << p; // TODO: comment
+  while(prevInfIdx >= 0) {
+    int marker = _informMarkers[p][prevInfIdx];
+    const PhaseVals &phase = theFam->getPhase(marker);
+    uint64_t ambigMiss = phase.ambigMiss;
+    uint64_t ivFlippable = phase.ivFlippable;
+    if ( !( ((ambigMiss >> childBit) & 1) | // missing?
+	    ((ivFlippable >> childBit) & parMask) ) ) //flippable?
+      break;
     prevInfIdx--;
-    // To have a recomb record child must have several
-    // informative markers in succession so this must not ever
-    // go off the beginning of the chromosome
-//    assert(prevInfIdx >= 0);
   }
-  int prevInform = _informMarkers[p][prevInfIdx];
-  fprintf(out, "CO: %s %d %d %s %s %d %s %d %s\n",
-	  parents[p]->getId(), p, numChildren,
-	  theFam->_children[ record->child ]->getId(), chrName,
-	  prevInform - firstMarker, Marker::getMarker(prevInform)->getName(),
-	  record->recombMarker - firstMarker,
-	  Marker::getMarker(record->recombMarker)->getName());
+
+  if (prevInfIdx < 0) {
+    fprintf(out, "CO: %s %d %d %s %s %d %s %d %s\n",
+	    parents[p]->getId(), p, numChildren,
+	    theFam->_children[ record->child ]->getId(), chrName,
+	    -1, "NA", record->recombMarker - firstMarker,
+	    Marker::getMarker(record->recombMarker)->getName());
+  }
+  else {
+    int prevInform = _informMarkers[p][prevInfIdx];
+    fprintf(out, "CO: %s %d %d %s %s %d %s %d %s\n",
+	    parents[p]->getId(), p, numChildren,
+	    theFam->_children[ record->child ]->getId(), chrName,
+	    prevInform - firstMarker, Marker::getMarker(prevInform)->getName(),
+	    record->recombMarker - firstMarker,
+	    Marker::getMarker(record->recombMarker)->getName());
+  }
 }
