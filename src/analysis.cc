@@ -14,7 +14,8 @@ dynarray<int>      Analysis::_numInformForChild[2];
 std::list<Recomb>  Analysis::_recombs[2];
 
 
-// Detect COs in <theFam>
+// Detect COs in <theFam>, on chromosome with index <chrIdx>, and print
+// detected COs to <out>
 void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
   int numChildren = theFam->_children.length();
 
@@ -41,15 +42,30 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
   for(int marker = firstMarker; marker <= lastMarker; marker++) {
     const PhaseVals &phase = theFam->getPhase(marker);
 
-    if (phase.status == PHASE_OK) {
-      // In various loops below, must examine whichever parent(s)
-      // this marker is informative for. To do a for loop, need to figure out
-      // which parents to to include in the range; either same as the
-      // starting parent, or, if the marker is partly informative (PI) --
-      // i.e., if hetParent == 2, we analyze both:
-      int isPI = phase.hetParent >> 1;
-      int startP = phase.hetParent & 1;
-      int endP = isPI * 1 + (1-isPI) * startP;
+    uint8_t ambigParHet = phase.ambigParHet | (1 << phase.hetParent);
+
+    // Have an informative marker so long as the status is PHASE_OK.
+    // Also need for the marker to be conssitently informative for one or the
+    // other parents (or both): if ambigParHet has the two lowest order bits
+    // set, it could be inforamtive for either parent. As such, in that case,
+    // it's ambiguous and we treat it as informative for neither (skip it)
+    if (phase.status == PHASE_OK && (ambigParHet & 3) != 3) {
+      // Determine which parents this marker is necessarily informative for. If
+      // the two lowest order bits are set then it's heterozygous for only one
+      // parent (though there maybe an ambiguous way in which it can be
+      // heterozygous for both).
+      uint8_t oneParHetBits = ambigParHet & 3;
+      // The following is 1 if either of the two lowest order bits are set and 0
+      // otherwise. Thus it is 0 if the only possible heterozygous parent status
+      // is both parents het.
+      uint8_t haveOneParHet = ((oneParHetBits & 2) >> 1) ^ (oneParHetBits & 1);
+      // start from 0 for bit 0 set; 1 for bit 1 set; and 0 if both parents are
+      // heterozygous (when niether is set)
+      int startP = oneParHetBits >> 1;
+      // upper bound -- strictly greater than -- for the parent values that are
+      // heterozygous is 1 for bit 0 set; 2 for bit 1 set; and 2 if both parents
+      // are heterozgyous
+      int boundP = haveOneParHet * oneParHetBits + (1 - haveOneParHet) * 2;
 
       if (informSeen) {
 	// which haplotypes recombined? Will only inspect those where the
@@ -59,7 +75,7 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
 	uint64_t recombs = (prevIV ^ phase.iv) &
 					~(phase.ivFlippable | prevIVUnassigned);
 
-	for(int p = startP; p <= endP; p++) {
+	for(int p = startP; p < boundP; p++) {
 	  for(itr = _recombs[p].begin(); itr != _recombs[p].end(); ) {
 	    // check if the recombination (back to the original) is present
 	    // here. If so, erase the record
@@ -104,7 +120,9 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
 	  int recombParent = recombBit % 2; // even is parent 0, odd 1
 	  // Should only observe recombinations at markers that are
 	  // heterozygous for the parent in which the recombination occurred
-	  assert(phase.hetParent == recombParent || phase.hetParent == 2);
+//	  assert(phase.hetParent == recombParent || phase.hetParent == 2);
+	  assert((ambigParHet & (1 << recombParent)) |
+						      (ambigParHet & (1 << 2)));
 
 	  // Remove this recombination from further consideration:
 	  recombs -= 1 << recombBit;
@@ -133,7 +151,7 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
 
 
       // Update various state for next marker
-      for(int p = startP; p <= endP; p++) {
+      for(int p = startP; p < boundP; p++) {
 	_informMarkers[p].append(marker);
 	if (!allChildrenSolid[p]) {
 	  bool haveNonSolid = false; // for updating allChildrenSolid
@@ -141,8 +159,8 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
 	  for(int c = 0; c < numChildren; c++) {
 	    // Note: we reset the count to 0 above whenever a child recombines
 	    // early on on the chromosome (i.e., before allChildrenSolid[p])
-	    if ( ((phase.ambigMiss >> (2 * c)) & 1) == 0 && // non-missing?
-		 ((phase.ivFlippable >> (2 * c + p)) & 1) == 0 ) { // non-flippable?
+	    if (((phase.ambigMiss >> (2 * c)) & 1) == 0 && // non-missing?
+		((phase.ivFlippable >> (2 * c + p)) & 1) == 0) {//non-flippable?
 	      _numInformForChild[p][c]++;
 	      if (_numInformForChild[p][c] < CmdLineOpts::edgeCO)
 		haveNonSolid = true;
@@ -200,8 +218,11 @@ void Analysis::printCO(std::list<Recomb>::iterator record, FILE *out, int p,
     uint64_t ambigMiss = phase.ambigMiss;
     uint64_t ivFlippable = phase.ivFlippable;
     if ( !( ((ambigMiss >> childBit) & 1) | // missing?
-	    ((ivFlippable >> childBit) & parMask) ) ) //flippable?
+	    ((ivFlippable >> childBit) & parMask) ) ) { //flippable?
+      uint8_t ambigParHet = phase.ambigParHet | (1 << phase.hetParent);
+      assert((ambigParHet & (1 << p)) | (ambigParHet & (1 << 2)));
       break;
+    }
     prevInfIdx--;
   }
 
