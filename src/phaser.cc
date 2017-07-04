@@ -121,7 +121,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
 
   /////////////////////////////////////////////////////////////////////////////
   // Step 4: HMM analysis finished. Back trace and assign phase!
-  backtrace(theFam);
+  backtrace(theFam, bothParMissing);
 }
 
 // Do initial setup of values used throughout phasing the current chromosome
@@ -1335,6 +1335,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // arbitrarily pick the location of the error state with no indication
     // about the ambiguity.  The effect of this is to prefer paths without
     // errors in the case of ambiguities.
+    // TODO: can we optimize the conditions here?
     else if (totalRecombs == theState->minRecomb &&
 	     (prevIndex >= 0 || (theState->error & 1)) &&
 	     (prevError == 0 || (theState->error & 2))) {
@@ -1719,7 +1720,7 @@ void Phaser::rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 
 // TODO: go through and comment this and possibly refactor.
 // Back traces and minimum recombinant phase using the states in <_hmm>.
-void Phaser::backtrace(NuclearFamily *theFam) {
+void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing) {
   int lastIndex = _hmm.length() - 1;
 
   if (lastIndex < 0)
@@ -1729,6 +1730,51 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 
   uint32_t curStateIdx = findMinStates(_hmm[lastIndex]);
   uint32_t prevStateIdx = UINT32_MAX;
+
+  // For when both parents are missing data:
+  // Are we in a run of arbitrary/ambiguous parent assignments that begins at
+  // the end of the chromosome. Due to ambiguous recombinations, it is possible
+  // for the states to be such that the parent assignments are completely
+  // ambiguous. When this happens, we can select one of the parent assignments
+  // at the end of the chromosome and trace back until the point where the
+  // assignments are no longer ambiguous. That state is the point at which
+  // the arbitrary parent assignment starts.
+  bool parArbitraryRun = false;
+  if (_curBTAmbigSet->size() == 1 && bothParMissing) {
+    state_set_iter it = _curBTAmbigSet->begin();
+
+    // Parent heterozygosity is necessarily ambiguous when:
+    // - For children whose IV values differ, the transmitted haplotypes from
+    //   both parents differ.
+    // - If two different states' IV values match, the parent haplotype
+    //   transmissions are opposite each other for the individual child. That is
+    //   each such child received AB or BA. See <ivValsExpOpp>.
+    //   Note this doesn't apply to ambiguous IV values stored in the ambig
+    //   field of the state. These necessarily aren't informative about the
+    //   parents as they can take on two different values.
+    // - Ambig IV values match between the states
+    // It's non-trivial to argue for ambiguity here, but: if all children are
+    // AB and BA, the marker is certainly ambiguous as to which parent is
+    // heterozygous. When a recombination happens from a marker where all
+    // children are AB or BA, it can be attributed to either parent. This yields
+    // either AA or BB and these two IV values satisfy the first condition
+    // above. Ambiguous IV values are similar to the first case: the child has
+    // one of two different IV values that are consistent with two possible
+    // phase assignments in the parents.
+
+    uint64_t curIV = _hmm[lastIndex][curStateIdx]->iv;
+    uint64_t ambigIV = it->iv;
+    uint64_t ivDiffBits = curIV ^ ambigIV;
+    // Which bits do we expect to have opposite values for?
+    uint64_t ivExpectOppositeBits = ~(ivDiffBits | it->ambig);
+    uint64_t ivValsExpOpp = ambigIV & ivExpectOppositeBits;
+    parArbitraryRun = _hmm[lastIndex][curStateIdx]->ambig == it->ambig &&
+	      ((ivDiffBits >> 1) & _parBits[0]) == (ivDiffBits & _parBits[0]) &&
+	      (((ivValsExpOpp >> 1) ^ ivValsExpOpp) & _parBits[0]) ==
+					  (_parBits[0] & ivExpectOppositeBits);
+
+  }
+
   // Number of recombinations in <curState> relative to <prevState> below
   uint8_t numRecombs; // TODO: optimization: do we want this?
   for(int hmmIndex = lastIndex; hmmIndex >= 0; hmmIndex--) {
@@ -1758,11 +1804,31 @@ void Phaser::backtrace(NuclearFamily *theFam) {
 
       State *ambigState = _hmm[curHmmIndex][stateIdx];
 
-      ivFlippable |= curState->iv ^ ambigIV;
+      uint64_t ivDiffBits = curState->iv ^ ambigIV;
 
-      curAmbigParHet |= ambigState->ambigParHet;
-      curAmbigParPhase |= ambigState->ambigParPhase;
-      curArbitraryPar |= ambigState->arbitraryPar;
+      if (parArbitraryRun && (ivDiffBits > 0 || curState->ambig !=ambigAmbig)) {
+	// Only remains arbitrary if the following coditions hold (see longer
+	// comment above when parArbtitrary run is first set true)
+	// (1) All differing bits different for both parents?
+	// (2) All non-diff (same) bits the opposite of each other in the IV?
+	// (3) The ambig IV values (curState->ambig and ambigAmbig) match
+	uint64_t ivExpectOppositeBits = ~(ivDiffBits | ambigAmbig);
+	uint64_t ivValsExpOpp = ambigIV & ivExpectOppositeBits;
+	parArbitraryRun = curState->ambig == ambigAmbig &&
+	      ((ivDiffBits >> 1) & _parBits[0]) == (ivDiffBits & _parBits[0]) &&
+	      (((ivValsExpOpp >> 1) ^ ivValsExpOpp) & _parBits[0]) ==
+					  (_parBits[0] & ivExpectOppositeBits);
+	if (!parArbitraryRun)
+	  curArbitraryPar = 1;
+      }
+
+      if (!parArbitraryRun) {
+	ivFlippable |= ivDiffBits;
+
+	curAmbigParHet |= ambigState->ambigParHet;
+	curAmbigParPhase |= ambigState->ambigParPhase;
+	curArbitraryPar |= ambigState->arbitraryPar;
+      }
 
       // Add the previous state index(es) to <_prevIdxSet> so long as the
       // ambiguous state has the same error status as the current state.
@@ -1825,6 +1891,7 @@ void Phaser::backtrace(NuclearFamily *theFam) {
       State *prevState = _hmm[hmmIndex-1][prevStateIdx];
       prevState->iv = prevStateInfo.iv;
       prevState->ambig = prevStateInfo.ambig;
+      // TODO: optimization: remove entry for prevStateInfo from _prevBTAmbig
 
       // Keeping the following comment and code, but the value
       // <curState->maxPrevRecomb> has the same value that was calculated by

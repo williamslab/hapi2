@@ -162,7 +162,7 @@ class Phaser {
     static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 					  uint16_t minMaxRec[2],
 					  int numChildren);
-    static void backtrace(NuclearFamily *theFam);
+    static void backtrace(NuclearFamily *theFam, bool bothParMissing);
     static uint32_t findMinStates(dynarray<State*> &theStates);
     static void deleteStates(dynarray<State*> &theStates);
     static void propagateBackIV(uint64_t curIV, uint64_t curAmbig,
