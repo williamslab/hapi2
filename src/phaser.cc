@@ -21,6 +21,11 @@ uint64_t Phaser::_parBits[3];
 uint64_t Phaser::_flips[4];
 uint64_t Phaser::_ambigFlips[4];
 
+// The following was an experiment to allow the code to choose state paths that
+// include errors when the number of recombinations (including the error
+// penalty) matches between the various options. It doesn't fully do what it
+// should since back tracing omits ambiguities related to errors.
+const bool preferErrorPath = false;
 
 void Phaser::run(NuclearFamily *theFam, int chrIdx) {
   // Get first and last marker numbers for the chromosome to be phased:
@@ -1280,6 +1285,14 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // <theState>? (Could be either a new minimum or an ambiguous one)
     bool theStateUpdated = false;
 
+    // Is the path via <prevIndex> an error? It is if prevIndex is an error,
+    // which would make the current state an error if it is used as the new
+    // previous state
+    bool prevPathError = prevError != 0 || prevIndex < 0;
+    // Is the current state an error state and/or does it include an error
+    // state in its previous state?
+    bool curIsError = theState->error > 0;
+
     // TODO: document the error case (prefer paths without errors)
     // Is the previous state <prevIndex> the new minimally recombinant path to
     // <theState>? Certainly if it produces fewer recombinations.
@@ -1288,7 +1301,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // proposed new state has no error in its path nor is it an error state.
     if (totalRecombs < theState->minRecomb ||
 	(totalRecombs == theState->minRecomb &&
-	 theState->error > 0 && prevError == 0 && prevIndex >= 0)) {
+	 ((!preferErrorPath && curIsError && !prevPathError) ||
+	  (preferErrorPath && !curIsError && prevPathError)))) {
       theStateUpdated = true;
 
       theState->iv = fullIV;
