@@ -92,7 +92,7 @@ class Phaser {
       _genos.resize(maxMarkers);
       _ambigPrevLists.resize(maxMarkers);
     }
-    static void run(NuclearFamily *theFam, int chrIdx);
+    static void run(NuclearFamily *theFam, int chrIdx, FILE *log);
 
   private:
     //////////////////////////////////////////////////////////////////

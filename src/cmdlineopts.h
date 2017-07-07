@@ -7,8 +7,8 @@
 #ifndef CMDLINEOPTS_H
 #define CMDLINEOPTS_H
 
-#define VERSION_NUMBER	"1.85b"
-#define RELEASE_DATE    "22 May 2017"
+#define VERSION_NUMBER	"1.86b"
+#define RELEASE_DATE    "7 Jul 2017"
 
 class CmdLineOpts {
   public:
@@ -83,6 +83,9 @@ class CmdLineOpts {
     // Introduce an error state at one marker if doing so saves at least this
     // many recombinations. 0 disables.
     static int max1MarkerRecomb;
+
+    // Verbose log?
+    static int verbose;
 };
 
 #endif // CMDOPTIONS_H

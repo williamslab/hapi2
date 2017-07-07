@@ -132,7 +132,6 @@ int main(int argc, char **argv) {
     fflush(stdout);
     fprintf(log, "\n");
 
-
     NuclearFamily *theFam = toBePhased[f];
     const char *parentIds[2] = { theFam->_parents->first->getId(),
 				 theFam->_parents->second->getId() };
@@ -144,6 +143,11 @@ int main(int argc, char **argv) {
     // Phase the current family on each chromosome successively and print
     // the results the user requested
     theFam->initPhase();
+    if (CmdLineOpts::verbose) {
+      fprintf(log, "Phasing family with parents %s and %s\n",
+	      parentIds[0], parentIds[1]);
+    }
+
     for(int chrIdx = 0; chrIdx < numChrs; chrIdx++) {
       FILE *resultsFiles[3];
       bool shouldPhase = openFilesToWrite(filename, resultsFiles, chrIdx,
@@ -160,7 +164,11 @@ int main(int argc, char **argv) {
 	continue;
       }
 
-      Phaser::run(theFam, chrIdx);
+      if (CmdLineOpts::verbose) {
+	fprintf(log, "  Chromsome %s:\n", Marker::getChromName(chrIdx));
+      }
+
+      Phaser::run(theFam, chrIdx, log);
 
       if (CmdLineOpts::txtOutput && resultsFiles[0]) {
 	theFam->printHapTxt(resultsFiles[0], chrIdx);

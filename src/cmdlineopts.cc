@@ -32,6 +32,7 @@ int   CmdLineOpts::forceWrite = 0;
 int   CmdLineOpts::max1MarkerRecomb = DEFAULT_NO_ERROR_MAX;
 int   CmdLineOpts::detectCO = 0;
 int   CmdLineOpts::edgeCO = 0;
+int   CmdLineOpts::verbose = 0;
 
 // Parses the command line options for the program.
 bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
@@ -64,6 +65,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 //    {"vcf_out", no_argument, &CmdLineOpts::vcfOutput, 1},
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
     {"force", no_argument, &CmdLineOpts::forceWrite, 1},
+    {"verbose", no_argument, &CmdLineOpts::verbose, 1},
     {0, 0, 0, 0}
   };
 
@@ -365,5 +367,7 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "  --force\t\tForce writing to output files (overwrite if they exist)\n");
   fprintf(out, "\n");
   fprintf(out, "  --no_family_id\tIgnore family ids from PLINK .fam file\n");
+  fprintf(out, "\n");
+  fprintf(out, "  --verbose\t\tPrint verbose messsages to log during phasing\n");
   fprintf(out, "\n");
 }

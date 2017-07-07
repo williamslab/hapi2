@@ -27,7 +27,7 @@ uint64_t Phaser::_ambigFlips[4];
 // should since back tracing omits ambiguities related to errors.
 const bool preferErrorPath = false;
 
-void Phaser::run(NuclearFamily *theFam, int chrIdx) {
+void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
   // Get first and last marker numbers for the chromosome to be phased:
   int firstMarker = Marker::getFirstMarkerNum(chrIdx);
   int lastMarker = Marker::getLastMarkerNum(chrIdx);
@@ -40,6 +40,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     fprintf(stderr, "       changing to >64 bits for inheritance vectors would fix this\n");
     exit(9);
   }
+
 
   // Ready storage containers to analyze this chromosome
   _hmm.clear();
@@ -74,6 +75,28 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx) {
     // Step 1: Determine marker type and check for Mendelian errors
     int mt = getMarkerType(parentGenoTypes, childGenoTypes, homParGeno);
     assert(mt > 0 && (mt & ~((1 << MT_N_TYPES) -1) ) == 0);
+
+    if (CmdLineOpts::verbose) {
+      fprintf(log, "    Marker %d:", m);
+      if (mt == 1 << MT_ERROR)
+	fprintf(log, " Mendelian error\n");
+      else if (mt == 1 << MT_AMBIG)
+	fprintf(log, " Ambiguous (all individuals heterozyogus or missing)\n");
+      else if (mt & (1 << MT_UN))
+	fprintf(log, " Uninformative (neither parent heterozygous)\n");
+      else {
+	int FI1 = 1 << MT_FI_1;
+	int PI = 1 << MT_PI;
+	int both = FI1 | PI;
+	if (mt & both)
+	  fprintf(log, " One OR both parents heterozygous\n");
+	else if (mt & FI1)
+	  fprintf(log, " One parent heterozygous\n");
+	else if (mt & PI)
+	  fprintf(log, " Both parents heteterozygous\n");
+      }
+      fflush(log);
+    }
 
     if (mt & ((1 << MT_ERROR) | (1 << MT_AMBIG))) {
       // should only be one of the above:
