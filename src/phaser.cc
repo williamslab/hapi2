@@ -119,8 +119,8 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
       // data. Note that if we are missing data for both parents and all
       // the children are heterozygous, the marker is ambiguous and handled
       // just above.
-      theFam->setStatus(/*marker=*/ m, PHASE_UNINFORM, parentData,
-			childrenData[4], childrenData[G_MISS] &_parBits[0]);
+      theFam->setUninform(/*marker=*/ m, parentData, childrenData[4],
+			  childrenData[G_MISS] & _parBits[0], homParGeno);
       continue;
     }
 
@@ -149,7 +149,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
 
   /////////////////////////////////////////////////////////////////////////////
   // Step 4: HMM analysis finished. Back trace and assign phase!
-  backtrace(theFam, bothParMissing);
+  backtrace(theFam, bothParMissing, lastMarker);
 }
 
 // Do initial setup of values used throughout phasing the current chromosome
@@ -365,7 +365,17 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	  return (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HOM0: // one parent homozygous for 0
 	  // can't be partly informative with one homozygous parent:
-	  homParGeno = G_MISS; // not really sure of other parent's genotype
+//	  homParGeno = G_MISS; // not really sure of other parent's genotype
+	  // though the parent's genotype is potentially heterozygous, we have
+	  // no evidence that that is the case here. As such, in the caller, if
+	  // the marker type includes MT_UN, we set the status to uninformative.
+	  // We also wish to impute, as much as possible, any missing genotypes
+	  // in the parent. Here, we know the missing parent must have
+	  // transmitted allele 0 to the children. As such, we impute it as
+	  // carrying that allele, and later (in backtrace()), we determine
+	  // whether both haplotypes were transmitted or only one and we print
+	  // the known information accordingly. IMPUTING
+	  homParGeno = G_HOM0;
 	  return (1 << MT_UN) | (1 << MT_FI_1);
 	case G_HOM1: // one parent homozygous for 1
 	  // Mendelian error: can't get children that are homozygous for allele
@@ -391,7 +401,9 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	  return 1 << MT_ERROR;
 	case G_HOM1: // one parent homozygous for 1
 	  // can't be partly informative with one homozygous parent:
-	  homParGeno = G_MISS; // not really sure of other parent's genotype
+//	  homParGeno = G_MISS; // not really sure of other parent's genotype
+	  // see comment above marked IMPUTING
+	  homParGeno = G_HOM1;
 	  return (1 << MT_UN) | (1 << MT_FI_1);
       }
       break;
@@ -451,7 +463,9 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	case G_HOM0: // one parent homozygous for 0
 	case G_HOM1: // one parent homozygous for 1
 	  // other parent either heterozygous or homozygous for other allele
-	  homParGeno = missingType;
+	  // gives inverse homozygous genotype relative to <missingType>:
+	  // see comment above marked IMPUTING
+	  homParGeno = G_HOM1 - missingType;
 	  return (1 << MT_UN) | (1 << MT_FI_1);
       }
       break;
@@ -1757,7 +1771,8 @@ void Phaser::rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 
 // TODO: go through and comment this and possibly refactor.
 // Back traces and minimum recombinant phase using the states in <_hmm>.
-void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing) {
+void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
+		       int chrLastMarker) {
   int lastIndex = _hmm.length() - 1;
 
   if (lastIndex < 0)
@@ -1814,6 +1829,9 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing) {
 
   // Number of recombinations in <curState> relative to <prevState> below
   uint8_t numRecombs; // TODO: optimization: do we want this?
+  int lastAssignedMarker = chrLastMarker + 1; // technically not assigned yet
+  uint64_t lastAssignedIV = 0, lastIVFlip = 0;
+  bool lastIVSet = false;
   for(int hmmIndex = lastIndex; hmmIndex >= 0; hmmIndex--) {
     int curHmmIndex = hmmIndex; // not redundant: errors modify hmmIndex
     State *curState = _hmm[curHmmIndex][curStateIdx];
@@ -1957,6 +1975,58 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing) {
 		     parMissing, curState->hetParent, curState->homParentGeno,
 		     curState->parentPhase, numRecombs, curAmbigParHet,
 		     curAmbigParPhase, curArbitraryPar);
+
+    // Determine which parent haplotypes were _un_transmitted. The first two
+    // bits are parent 0's haplotype 0 and 1, and the second two bits are
+    // parent 1's haplotype 0 and 1. If the corresponding bit is set to 1, the
+    // haplotype was _not_ transmitted
+    uint64_t untrans = 0;
+    // TODO: need the flanking informative markers for each parent do this right
+    // We use the IV values at the flanking informative markers to determine
+    // this. <ivFlippable> values are uncertain and so those values will not
+    // figure into which haplotypes the parents transmitted.
+    // start with <ivFlippable> at the current and subsequent marker:
+    uint64_t uncertainIV = lastIVFlip | ivFlippable;
+    if (lastIVSet)
+      // if we have a meaningful IV for the subsequent marker, indicate that the
+      // IV values are uncertain for any IV values that are flipped between them
+      uncertainIV |= curState->iv ^ lastAssignedIV;
+    // make the transmitted haplotype assignments for all markers between the
+    // current marker and the subsequent informative marker
+    for(int m = _hmmMarker[curHmmIndex] + 1; m < lastAssignedMarker; m++) {
+      const PhaseVals &phase = theFam->getPhase(m);
+      assert(phase.status != PHASE_OK);
+      // If the child is missing data, it should not figure into the transmitted
+      // haplotypes regardless of the imputed IV value at this uninformative
+      // marker. In cases, for example, where all but one child is missing data
+      // each parent will only have transmitted one haplotype and we will have
+      // limited information about their overall genotype status. Note that we
+      // do this work of determining the <untrans> value to enable imputation
+      // of the parent's genotype, but we can't impute based on children whose
+      // data is missing.
+      uint64_t missing = phase.ambigMiss;
+
+      for(int p = 0; p < 2; p++) {
+	// shift the <IV> values for either parent into the 0'th bit so that
+	// we can use <missing> -- <missing> is only set to 1 in the 0th bit for
+	// each child.
+	uint64_t shiftedIV = curState->iv >> p;
+	uncertainIV >>= p; // mirror the above shift in all <IV> values
+	// (shiftedIV & _parBits[0]) == 0, the first haplotype was
+	// transmitted. To detect when it was _un_transmitted, we use
+	// ~shiftedIV and check when that value is 0
+	if ((~shiftedIV & _parBits[0] & ~(uncertainIV | missing)) == 0)
+	  // first haplotype for this parent untransmitted:
+	  untrans |= 1 << (2 * p); // use 1 for first haplotype
+	// (shiftedIV & _parBits[0]) == 0 implies the second haplotype was
+	// untransmitted, so:
+	if ((shiftedIV & _parBits[0] & ~(uncertainIV | missing)) == 0)
+	  untrans |= 2 << (2 * p); // use 2 for second haplotype
+      }
+
+      theFam->setUntransPar(m, untrans);
+    }
+
     deleteStates(_hmm[curHmmIndex]);
 
     // ready for next iteration -- make prev into cur for states and state sets
@@ -1965,6 +2035,10 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing) {
     _curBTAmbigSet = _prevBTAmbigSet;
     _prevBTAmbigSet = tmp;
     _prevBTAmbigSet->clear();
+
+    lastAssignedMarker = _hmmMarker[curHmmIndex];
+    lastAssignedIV = curState->iv;
+    lastIVFlip = ivFlippable;
   }
 }
 
