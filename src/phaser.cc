@@ -2037,7 +2037,27 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
     _prevBTAmbigSet->clear();
 
     lastAssignedMarker = _hmmMarker[curHmmIndex];
-    lastAssignedIV = curState->iv;
+    // To detect untrans, we exclude samples that recombine between informative
+    // positions. Because the IV values are set even for uninformative values
+    // at prior markers, we'd like to propagate back the IV values here. Because
+    // of the way we construct states, the recombined value is always guaranteed
+    // to be later on the chromosome. Thus, we propagate back IV values for
+    // the uninformative parent (if one is homozygous) and for any children that
+    // are missing data. This will enable the <uncertainIV> value above to
+    // identify IV values that do differ between (informative) markers relative
+    // to the data for each child.
+    // TODO: what if the heterozygous status of the parent is ambiguous?
+    // TODO: what about ambiguous states? Should we be propagating back IV
+    // values in the loop toward the beginning of this method in order to
+    // calculate IVflippable, etc.? In some sense that is what we're calculating
+    // here: which IV values are potentially flippable and therefore shouldn't
+    // factor into which parent's haplotypes were transmitted.
+    uint8_t hetParent = curState->hetParent;
+    uint8_t oneParHomozy = 1 - (hetParent >> 1);
+    uint64_t propagateMask = (missing * 3) |
+					  (oneParHomozy * _parBits[hetParent]);
+    lastAssignedIV = (curState->iv & ~propagateMask) |
+					       (lastAssignedIV & propagateMask);
     lastIVFlip = ivFlippable;
   }
 }
