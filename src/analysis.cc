@@ -37,6 +37,9 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
   // confidently know starting haplotypes for each parent?
   bool allChildrenSolid[2] = { false, false };
 
+  // print header
+  fprintf(out, "#event parent_id parent_sex num_child recipient_id chrom marker_num_before marker_id_before marker_num_after marker_id_after\n");
+
   int firstMarker = Marker::getFirstMarkerNum(chrIdx);
   int lastMarker = Marker::getLastMarkerNum(chrIdx);
   for(int marker = firstMarker; marker <= lastMarker; marker++) {
