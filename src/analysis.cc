@@ -37,6 +37,15 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
   // confidently know starting haplotypes for each parent?
   bool allChildrenSolid[2] = { false, false };
 
+  // Bits that correspond to either or both parents in IV values:
+  uint64_t allBitsSet = ~0ul; // initially: fewer depending on numChildren
+  if (numChildren < 32)
+    allBitsSet &= (1ul << (2*numChildren)) - 1;
+  uint64_t parBits[3];
+  parBits[0] = 0x5555555555555555 & allBitsSet;
+  parBits[1] = 0xAAAAAAAAAAAAAAAA & allBitsSet;
+  parBits[2] = allBitsSet;
+
   // print header
   fprintf(out, "#event parent_id parent_sex num_child recipient_id chrom marker_num_before marker_id_before marker_num_after marker_id_after\n");
 
@@ -53,32 +62,46 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
     // set, it could be inforamtive for either parent. As such, in that case,
     // it's ambiguous and we treat it as informative for neither (skip it)
     if (phase.status == PHASE_OK && (ambigParHet & 3) != 3) {
-      // Determine which parents this marker is necessarily informative for. If
-      // the two lowest order bits are set then it's heterozygous for only one
-      // parent (though there maybe an ambiguous way in which it can be
-      // heterozygous for both).
-      uint8_t oneParHetBits = ambigParHet & 3;
-      // The following is 1 if either of the two lowest order bits are set and 0
-      // otherwise. Thus it is 0 if the only possible heterozygous parent status
-      // is both parents het.
-      uint8_t haveOneParHet = ((oneParHetBits & 2) >> 1) ^ (oneParHetBits & 1);
-      // start from 0 for bit 0 set; 1 for bit 1 set; and 0 if both parents are
-      // heterozygous (when niether is set)
-      int startP = oneParHetBits >> 1;
-      // upper bound -- strictly greater than -- for the parent values that are
-      // heterozygous is 1 for bit 0 set; 2 for bit 1 set; and 2 if both parents
-      // are heterozgyous
-      int boundP = haveOneParHet * oneParHetBits + (1 - haveOneParHet) * 2;
+      // Are both parents potentially heterozygous? Yes if either the bit for
+      // both parents heterozygous is set to 1 or if both the other two bits
+      // are set to 1.
+      uint8_t bothParHet = (ambigParHet >> 2) |
+			    (((ambigParHet & 2) >> 1) & (ambigParHet & 1));
+      // For determining which set of prior recombinations to examine, which
+      // parent index should we start from? 0 if <bothParHet>, but otherwise
+      // it suffices to shift by 1 which will give 0 if parent 0 only is
+      // heterozygous and 1 if only parent 1 is.
+      int startP = (1 - bothParHet) * (ambigParHet >> 1);
+      // What is the upper bound of the loop over informative parents? Should
+      // either be 1 if <bothParHet>. Otherwise, for only one parent, we only
+      // go through the loop once, so <startP> == <endP>.
+      int endP = bothParHet + (1 - bothParHet) * startP;
 
+      // TODO: remove
+      if (ambigParHet & 4) {
+	assert(startP == 0 && endP == 1);
+      }
+
+      // Which IV bits are uninformative at this marker? Any that are in
+      // ivFlippable and any corresponding to children that have mssing data
+      uint64_t curUninformIV = phase.ivFlippable |
+					  ((phase.ambigMiss & parBits[0]) * 3);
+      // Also not informative for IV values corresponding to any
+      // non-heterozygous parent
+      if (!bothParHet) { // TODO: optimize
+	uint8_t informPar = startP;
+	uint8_t otherPar = informPar ^ 1;
+	curUninformIV |= parBits[otherPar];
+      }
       if (informSeen) {
 	// which haplotypes recombined? Will only inspect those where the
 	// IV value is fixed in the state -- that is, bits where ivFlippable ==0
 	// -- and where the IV has an assigned value -- that is, we've
 	// encountered a state where the corresponding bit in ivFlippable == 0
 	uint64_t recombs = (prevIV ^ phase.iv) &
-					~(phase.ivFlippable | prevIVUnassigned);
+					    ~(curUninformIV | prevIVUnassigned);
 
-	for(int p = startP; p < boundP; p++) {
+	for(int p = startP; p <= endP; p++) {
 	  for(itr = _recombs[p].begin(); itr != _recombs[p].end(); ) {
 	    // check if the recombination (back to the original) is present
 	    // here. If so, erase the record
@@ -93,7 +116,9 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
 	    // Does the child have data here? Is missing if the first bit of
 	    // the two bits allotted to it in <phase.ambigMiss> is 1
 	    int childBit = 2 * itr->child;
-	    if ( ((phase.ambigMiss >> childBit) & 1) == 0 ) { // non-missing?
+	    // non-missing and non-flippable?
+	    if (((phase.ambigMiss >> childBit) & 1) == 0 && // non-missing?
+	        ((phase.ivFlippable >>(childBit+p)) & 1) == 0) {//non-flippable?
 	      if (itr->numObs + 1 == CmdLineOpts::detectCO) {
 		// Valid crossover! print the info
 		printCO(itr, out, p, theFam, chrName, firstMarker);
@@ -154,7 +179,7 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
 
 
       // Update various state for next marker
-      for(int p = startP; p < boundP; p++) {
+      for(int p = startP; p <= endP; p++) {
 	_informMarkers[p].append(marker);
 	if (!allChildrenSolid[p]) {
 	  bool haveNonSolid = false; // for updating allChildrenSolid
@@ -174,12 +199,12 @@ void Analysis::findCOs(NuclearFamily *theFam, FILE *out, int chrIdx) {
 	  allChildrenSolid[p] = !haveNonSolid;
 	}
       }
-      // We'll propagate forward the IV value for bits that are flippable at the
-      // current marker. Also update unassigned bits: they are those for which
-      // all previous markers have had ivFlippable = 1
-      prevIV &= phase.ivFlippable;
-      prevIV |= phase.iv & ~phase.ivFlippable;
-      prevIVUnassigned &= phase.ivFlippable;
+      // We'll propagate forward the IV value for bits for which the current
+      // marker is uninformative. Also must update unassigned bits: any for
+      // which the current marker is uninformative remain unassigned.
+      prevIV &= curUninformIV;
+      prevIV |= phase.iv & ~curUninformIV;
+      prevIVUnassigned &= curUninformIV;
 
       informSeen = true;
     }
