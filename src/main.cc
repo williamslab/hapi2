@@ -114,10 +114,22 @@ int main(int argc, char **argv) {
     }
   }
 
+  int numFamsToBePhased = toBePhased.length();
+
+  for(int o = 0; o < 2; o++) {
+    FILE *out = outs[o];
+    fprintf(out, "\nHave data for %d individuals and %d nuclear families.\n",
+	    PersonBulk::_allIndivs.length(), numFamsToBePhased);
+  }
+  if (numFamsToBePhased == 0) {
+    for(int o = 0; o < 2; o++)
+      fprintf(outs[o], "ERROR: no families with two or more children to phase so exiting.\n");
+    exit(5);
+  }
+
   ///////////////////////////////////////////////////////////////////////////
   // Phase!
   int numChrs = Marker::getNumChroms();
-  int numFamsToBePhased = toBePhased.length();
 
   Phaser::init();
   int numFinished = 0;
@@ -191,7 +203,7 @@ int main(int argc, char **argv) {
   // Finished phasing all families!
   for(int o = 0; o < 2; o++) {
     FILE *out = outs[o];
-    fprintf(out, "Phasing families with two or more children... done");
+    fprintf(out, "Phasing families with two or more children... done.");
   }
   printf("               \n");
   fprintf(log, "\n");
