@@ -15,7 +15,7 @@
 #include "analysis.h"
 
 void createOutDir();
-bool openFilesToWrite(char *&filename, FILE *resultFiles[3], int chrIdx,
+bool openFilesToWrite(char *&filename, FILE *resultsFiles[5], int chrIdx,
 		      const char *parentIds[2], int famIdLen, int totalFileLen,
 		      int &allocFilenameLen, FILE *log);
 bool checkIfFileExists(char *filename, bool printWarning);
@@ -68,6 +68,9 @@ int main(int argc, char **argv) {
     fprintf(out, "Output to be generated in output directory:\n");
     if (CmdLineOpts::txtOutput) {
       fprintf(out, "  Text format haplotypes\n");
+    }
+    if (CmdLineOpts::pedOutput) {
+      fprintf(out, "  PLINK ped format haplotypes\n");
     }
     if (CmdLineOpts::ivOutput) {
       fprintf(out, "  Inheritance vectors for all markers\n");
@@ -160,8 +163,8 @@ int main(int argc, char **argv) {
 	      parentIds[0], parentIds[1]);
     }
 
+    FILE *resultsFiles[5];
     for(int chrIdx = 0; chrIdx < numChrs; chrIdx++) {
-      FILE *resultsFiles[3];
       bool shouldPhase = openFilesToWrite(filename, resultsFiles, chrIdx,
 			  parentIds, famIdLen,
 			  /*totalFileLen=*/ prefixLen + famSpecificFileLen,
@@ -194,6 +197,12 @@ int main(int argc, char **argv) {
 	Analysis::findCOs(theFam, resultsFiles[2], chrIdx);
 	fclose(resultsFiles[2]);
       }
+    }
+    if (CmdLineOpts::pedOutput && resultsFiles[3] && resultsFiles[4]) {
+      theFam->printPhasedPed(resultsFiles[3]);
+      Marker::printMapFile(resultsFiles[4]);
+      fclose(resultsFiles[3]);
+      fclose(resultsFiles[4]);
     }
     theFam->deletePhase();
 
@@ -246,7 +255,7 @@ void createOutDir() {
 
 // Attempts to open the files to be printed to, and alerts the user if any
 // exist. Returns true if at least one output file exists
-bool openFilesToWrite(char *&filename, FILE *resultsFiles[3], int chrIdx,
+bool openFilesToWrite(char *&filename, FILE *resultsFiles[5], int chrIdx,
 		      const char *parentIds[2], int famIdLen, int totalFileLen,
 		      int &allocFilenameLen, FILE *log) {
   const char *chrName = Marker::getChromName(chrIdx);
@@ -259,36 +268,53 @@ bool openFilesToWrite(char *&filename, FILE *resultsFiles[3], int chrIdx,
   }
 
   bool haveAnOutput = false; // only if one of the outputs is OK to write
-  const char *types[3] = { "hap", "iv", "co" };
-  const char *ext[3] = { ".txt", ".csv", "" };
-  const int  wantType[3] = { CmdLineOpts::txtOutput, CmdLineOpts::ivOutput,
-			     CmdLineOpts::detectCO };
-  for(int o = 0; o < 3; o++) {
+  const char *prefix[5] = { "hap-", "iv-", "co-", "", "" };
+  const char *ext[5] = { ".txt", ".csv", "", ".ped", ".map" };
+  const int  wantType[5] = { CmdLineOpts::txtOutput, CmdLineOpts::ivOutput,
+			     CmdLineOpts::detectCO, CmdLineOpts::pedOutput,
+			     CmdLineOpts::pedOutput };
+  // Do we want separate files for each chromsome? Not for all file types
+  const bool separateChrs[5] = { true, true, true, false, false };
+  bool okToWrite[5] = { false, false, false, false, false };
+  for(int o = 0; o < 5; o++) {
+    if (!separateChrs[o] && chrIdx != 0)
+      // Will only open the single file corresponding to this file type once,
+      // so skip now that we're past the first chromosome
+      continue;
+
     if (wantType[o]) {
       if (famIdLen == 0)
-	sprintf(filename, "%s/%s-%s-%s.%s%s", CmdLineOpts::outPrefix,
-		types[o], parentIds[0], parentIds[1], chrName, ext[o]);
+	sprintf(filename, "%s/%s%s-%s%s%s%s", CmdLineOpts::outPrefix,
+		prefix[o], parentIds[0], parentIds[1],
+		(separateChrs[o]) ? "." : "",
+		(separateChrs[o]) ? chrName : "", ext[o]);
       else
-	sprintf(filename, "%s/%s-%.*s-%s-%s.%s%s", CmdLineOpts::outPrefix,
-		types[o], famIdLen, parentIds[0],
+	sprintf(filename, "%s/%s%.*s-%s-%s%s%s%s", CmdLineOpts::outPrefix,
+		prefix[o], famIdLen, parentIds[0],
 		&parentIds[0][famIdLen+1], &parentIds[1][famIdLen+1],
-		chrName, ext[o]);
+		(separateChrs[o]) ? "." : "",
+		(separateChrs[o]) ? chrName : "", ext[o]);
 
-      bool okToWrite = checkIfFileExists(filename, CmdLineOpts::forceWrite);
-      haveAnOutput = haveAnOutput || okToWrite;
-      if (okToWrite) {
+      okToWrite[o] = checkIfFileExists(filename, CmdLineOpts::forceWrite);
+      if (okToWrite[o]) {
 	resultsFiles[o] = fopen(filename, "w");
 	if(!resultsFiles[o]) {
 	  fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
 	  perror("open");
 	  fprintf(log, "ERROR: couldn't open %s for writing!\n", filename);
 	  fprintf(log, "open: %s\n", strerror(errno));
+	  okToWrite[o] = false;
 	}
       }
       else
 	resultsFiles[o] = NULL;
     }
   }
+  // Any of these files being writable gives us an output:
+  haveAnOutput = okToWrite[0] || okToWrite[1] || okToWrite[2];
+  // need both the ped and map files writable to have an output; we use
+  // the resultsFiles values because okToWrite will be false when chrIdx != 0
+  haveAnOutput = haveAnOutput || (resultsFiles[3] && resultsFiles[4]);
 
   return haveAnOutput;
 }

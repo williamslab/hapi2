@@ -20,6 +20,7 @@ char *CmdLineOpts::markerFile = NULL;
 int   CmdLineOpts::vcfInput = 0;
 char *CmdLineOpts::outPrefix = NULL;
 int   CmdLineOpts::txtOutput = 0;
+int   CmdLineOpts::pedOutput = 0;
 int   CmdLineOpts::ivOutput = 0;
 int   CmdLineOpts::useImpute2Format = 0;
 int   CmdLineOpts::vcfOutput = 0;
@@ -54,6 +55,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 //    {"vcf", required_argument, NULL, 'v'},
     {"out",  required_argument, NULL, 'o'},
     {"txt", no_argument, &CmdLineOpts::txtOutput, 1},
+    {"ped", no_argument, &CmdLineOpts::pedOutput, 1},
     {"iv", no_argument, &CmdLineOpts::ivOutput, 1},
     {"detect_co", required_argument, NULL, DETECT_CO},
     {"edge_co", required_argument, NULL, EDGE_CO},
@@ -292,7 +294,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     haveGoodArgs = false;
   }
 
-  if (!(txtOutput || ivOutput || detectCO)) {
+  if (!(txtOutput || pedOutput || ivOutput || detectCO)) {
     fprintf(stderr, "ERROR: must choose at least one type of results to print\n");
     haveGoodArgs = false;
   }
@@ -336,6 +338,7 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "\n");
   fprintf(out, "3. RESULTS TO PRINT - ONE OR MORE OF:\n");
   fprintf(out, "  --txt\t\t\tText format haplotypes\n");
+  fprintf(out, "  --ped\t\t\tPLINK ped format haplotypes\n");
   fprintf(out, "  --iv\t\t\tInheritance vector data in CSV format\n");
   fprintf(out, "  --detect_co <#>\tDetect crossover events\n");
   fprintf(out, "\t\t\tNumeric argument specifies how many informative markers\n");

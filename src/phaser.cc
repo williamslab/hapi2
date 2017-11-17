@@ -115,12 +115,17 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
     }
 
     if (mt & (1 << MT_UN)) {
-      // TODO: When we the children are heterozygous, phase with parent's
-      // data. Note that if we are missing data for both parents and all
-      // the children are heterozygous, the marker is ambiguous and handled
-      // just above.
+      uint8_t swapHetChildren = 0;
+      if ((parentData & 3) == G_HOM1 || ((parentData >> 2) & 3) == G_HOM0)
+	// The default way to print phase of heterozygous children at
+	// uninformative markers is with allele 0 transmitted by dad and 1
+	// transmitted by mom. When Dad is homozygous for allele 1 or (when
+	// he is missing) Mom is homozygous for allele 0, this order needs to
+	// be swapped:
+	swapHetChildren = 1;
       theFam->setUninform(/*marker=*/ m, parentData, childrenData[4],
-			  childrenData[G_MISS] & _parBits[0], homParGeno);
+			  childrenData[G_MISS] & _parBits[0], homParGeno,
+			  swapHetChildren);
       continue;
     }
 
@@ -235,7 +240,7 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	// possible
 	return 1 << MT_ERROR;
       else
-	// both parents homzoygous: uninformative marker
+	// both parents homozygous: uninformative marker
 	return 1 << MT_UN;
       break;
     case (1 << G_HOM1):  // both homozygous for 1
@@ -244,7 +249,7 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	// possible
 	return 1 << MT_ERROR;
       else
-	// both parents homzoygous: uninformative marker
+	// both parents homozygous: uninformative marker
 	return 1 << MT_UN;
       break;
     case ((1 << G_HOM0) | (1 << G_HOM1)):  // one homozygous for 0, other 1
@@ -253,7 +258,7 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	// possible
 	return 1 << MT_ERROR;
       else
-	// both parents homzoygous: uninformative marker
+	// both parents homozygous: uninformative marker
 	return 1 << MT_UN;
       break;
 
@@ -1611,7 +1616,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 								prevUnassigned);
       size_t oldNumRecombs = numRecombs;
       numRecombs = popcount(recombs);
-      if ((isPI*IVambigPar) && theStateUpdated && oldNumRecombs == numRecombs) {
+      if (isPI && IVambigPar && theStateUpdated && oldNumRecombs == numRecombs){
 	theState->arbitraryPar = 1;
 	break;
       }
