@@ -7,8 +7,8 @@
 #ifndef CMDLINEOPTS_H
 #define CMDLINEOPTS_H
 
-#define VERSION_NUMBER	"1.87.1b"
-#define RELEASE_DATE    "17 Nov 2017"
+#define VERSION_NUMBER	"1.87.2b"
+#define RELEASE_DATE    "29 Nov 2017"
 
 class CmdLineOpts {
   public:
@@ -44,6 +44,9 @@ class CmdLineOpts {
     // Print ped format haplotypes?
     static int pedOutput;
 
+    // Print vcf format haplotypes?
+    static int vcfOutput;
+
     // Print inheritance vector values to a csv file?
     static int ivOutput;
 
@@ -59,9 +62,6 @@ class CmdLineOpts {
 
     // Print in IMPUTE2 format?
     static int useImpute2Format;
-
-    // Print in VCF bgzipped format?
-    static int vcfOutput;
 
     // When reading a PLINK format BED file, do not print the family ids
     // in the output file

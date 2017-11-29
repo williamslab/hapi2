@@ -21,9 +21,9 @@ int   CmdLineOpts::vcfInput = 0;
 char *CmdLineOpts::outPrefix = NULL;
 int   CmdLineOpts::txtOutput = 0;
 int   CmdLineOpts::pedOutput = 0;
+int   CmdLineOpts::vcfOutput = 0;
 int   CmdLineOpts::ivOutput = 0;
 int   CmdLineOpts::useImpute2Format = 0;
-int   CmdLineOpts::vcfOutput = 0;
 int   CmdLineOpts::noFamilyId = 0;
 char *CmdLineOpts::XchrName = NULL;
 char *CmdLineOpts::onlyChr = NULL;
@@ -52,10 +52,13 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"ind",  required_argument, NULL, 'i'},
 //    {"base", required_argument, NULL, 'b'},
     {"plink", required_argument, NULL, 'p'},
+    // Probably won't ever do vcf input, but if I do have it be the -v option,
+    // with --vcf being for output
 //    {"vcf", required_argument, NULL, 'v'},
     {"out",  required_argument, NULL, 'o'},
     {"txt", no_argument, &CmdLineOpts::txtOutput, 1},
     {"ped", no_argument, &CmdLineOpts::pedOutput, 1},
+    {"vcf", no_argument, &CmdLineOpts::vcfOutput, 1},
     {"iv", no_argument, &CmdLineOpts::ivOutput, 1},
     {"detect_co", required_argument, NULL, DETECT_CO},
     {"edge_co", required_argument, NULL, EDGE_CO},
@@ -64,7 +67,6 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"end", required_argument, NULL, END_POS},
     {"no_err_max", required_argument, NULL, NO_ERROR_MAX},
 //    {"impute2", no_argument, &CmdLineOpts::useImpute2Format, 1},
-//    {"vcf_out", no_argument, &CmdLineOpts::vcfOutput, 1},
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
     {"force", no_argument, &CmdLineOpts::forceWrite, 1},
     {"verbose", no_argument, &CmdLineOpts::verbose, 1},
@@ -260,13 +262,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     haveGoodArgs = false;
   }
 
-  if (vcfOutput && useImpute2Format) {
-    if (haveGoodArgs)
-      fprintf(stderr, "\n");
-    fprintf(stderr, "ERROR: --vcf_out and --impute2 contradictory: choose one only\n");
-    haveGoodArgs = false;
-  }
-  else if (vcfInput) {
+  if (vcfInput) {
     if (!useImpute2Format)
       vcfOutput = 1; // default to VCF output unless explicitly set to IMPUTE2
   }
@@ -294,7 +290,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     haveGoodArgs = false;
   }
 
-  if (!(txtOutput || pedOutput || ivOutput || detectCO)) {
+  if (!(txtOutput || pedOutput || vcfOutput || ivOutput || detectCO)) {
     fprintf(stderr, "ERROR: must choose at least one type of results to print\n");
     haveGoodArgs = false;
   }
@@ -337,8 +333,9 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "  -o, --out <dir>\tOutput directory (creates directory <dir> and <dir>.log)\n");
   fprintf(out, "\n");
   fprintf(out, "3. RESULTS TO PRINT - ONE OR MORE OF:\n");
-  fprintf(out, "  --txt\t\t\tText format haplotypes\n");
+  fprintf(out, "  --vcf\t\t\tVCF format haplotypes\n");
   fprintf(out, "  --ped\t\t\tPLINK ped format haplotypes\n");
+  fprintf(out, "  --txt\t\t\tText format haplotypes\n");
   fprintf(out, "  --iv\t\t\tInheritance vector data in CSV format\n");
   fprintf(out, "  --detect_co <#>\tDetect crossover events\n");
   fprintf(out, "\t\t\tNumeric argument specifies how many informative markers\n");
