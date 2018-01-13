@@ -65,6 +65,12 @@ int main(int argc, char **argv) {
       fprintf(out, "Chromosome:\t\t%s\n\n", CmdLineOpts::onlyChr);
     }
 
+    fprintf(out, "Maximum number of single marker recombinations:\t");
+    if (CmdLineOpts::max1MarkerRecomb == 0)
+      fprintf(out, "disabled\n\n");
+    else
+      fprintf(out, "%d\n\n", CmdLineOpts::max1MarkerRecomb);
+
     fprintf(out, "Output to be generated in output directory:\n");
     if (CmdLineOpts::vcfOutput) {
       fprintf(out, "  VCF format haplotypes\n");
