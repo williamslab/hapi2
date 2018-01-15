@@ -122,7 +122,8 @@ class Phaser {
     static void mapPrevToFull(const State *prevState, int64_t prevIdx,
 			      const State &curPartial, uint16_t minMaxRec[2],
 			      const uint64_t childrenData[5],
-			      uint8_t IVambigPar);
+			      uint8_t IVambigPar, bool bothParMissing,
+			      int numChildren);
     static void handlePI(const State *prevState, uint64_t &fullIV,
 			 uint64_t &fullAmbig, uint64_t &recombs,
 			 uint64_t parRecombs[2], uint64_t &propagateAmbig,
@@ -147,13 +148,15 @@ class Phaser {
 				   uint64_t &ambig1Unassigned);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t ambig1Unassigned,
-			     uint64_t recombs, uint64_t prevUnassigned,
+			     uint64_t recombs, uint64_t penalty,
+			     uint64_t prevUnassigned,
 			     uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
 			     uint8_t hetParent, uint8_t homParentGeno,
 			     uint8_t initParPhase, uint8_t altPhaseType,
 			     int64_t prevIndex, uint16_t prevMinRecomb,
-			     uint8_t prevError, uint8_t IVambigPar,
-			     uint16_t minMaxRec[2], bool hetParentUndefined,
+			     uint8_t prevError,uint16_t numInformSinceNonHetPar,
+			     uint8_t IVambigPar, uint16_t minMaxRec[2],
+			     bool hetParentUndefined,
 			     const uint64_t childrenData[5]);
     static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
 					      uint8_t &hetParIsDiff);
@@ -310,6 +313,9 @@ struct State {
   // Minimum number of recombinations to reach this state
   // TODO: add checks to ensure we never reach UINT16_MAX?
   uint16_t minRecomb;
+
+  // TODO: comment, rename
+  uint16_t numInformSinceNonHetPar;
 
   // We prefer to back trace to states that have recombinations immediately
   // before the current state as opposed to earlier. In general this decision
