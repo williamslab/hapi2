@@ -645,12 +645,6 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       State *newState = new State(partialStates[i]);
       newState->ambigPrev = 0;
       newState->minRecomb = 0;
-      uint8_t isPI = newState->hetParent >> 1;
-      // PI states are informative for both parents (both are heteterozygous),
-      // so there are 0 informative markers since seeing the non-het parent if
-      // <newState> is PI.
-      // If it is not PI, then there's been 1 state (the newly created one):
-      newState->numInformSinceNonHetPar = 1 - isPI;
       newState->maxPrevRecomb = 0;
       newState->ambigParHet = 1 << newState->hetParent;
       newState->parentPhase = 0;
@@ -695,7 +689,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 	// at the first first informative marker.
 	continue;
       mapPrevToFull(prevState, prevIdx, curPartial, minMaxRec, childrenData,
-		    IVambigPar, bothParMissing, numChildren);
+		    IVambigPar);
     }
   }
 
@@ -722,8 +716,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 	// Set back2Idx negative and shift by 1 so that the index 0 is also
 	// negative
 	mapPrevToFull(back2State, /*prevIdx=negative=>error*/ -back2Idx-1,
-		      curPartial, minMaxRec, childrenData, IVambigPar,
-		      bothParMissing, numChildren);
+		      curPartial, minMaxRec, childrenData, IVambigPar);
       }
     }
   }
@@ -763,8 +756,7 @@ uint8_t Phaser::isIVambigPar(const State *state, bool bothParMissing) {
 void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
 			   const State &curPartial, uint16_t minMaxRec[2],
 			   const uint64_t childrenData[5],
-			   uint8_t IVambigPar, bool bothParMissing,
-			   int numChildren) {
+			   uint8_t IVambigPar) {
   // (1) For each (current) partial state, map to an initial set of full state
   // values from <prevState>. The full <iv> and <unassigned> values are
   // determined based the corresponding fields in <prevState> and <curPartial>.
@@ -815,49 +807,6 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
   // ambiguous, we set these values and check them in updateStates() and below
   // for PI states.
   bool hetParentUndefined, oneParentUndefined;
-
-  // For dealing with regions in which a parent -- for which we do not have
-  // data -- transmitted only one of their two haplotypes. These will be silent
-  // and manifest as a long stretch of markers wherein only one parent is
-  // heterozygous. To ensure that we find the right IV when we eventually do
-  // encounter an informative marker for this parent, we detect this scenario
-  // (including requiring the IV to be one recombination away from having only
-  // one haplotype at the most recent informative marker for this parent) and
-  // impose a penalty for IVs that keep the same transmission status for the
-  // child that had the outlier haplotype at the most recent informative marker.
-  //
-  // The penalty occurs when transitioning to a state that is heterozygous for
-  // the indicated parent. We will be performing such a transition whenever the
-  // current state's heterozygous parent is different from the previous state
-  // (which was, for the <numInformSinceNonHetPar> value to be large,
-  // necessarily heterozygous for the other parent only).
-  //
-  // TODO: want this to work when one parent is missing as well?
-  // TODO: comment on the penalty variable
-  uint64_t penalty = 0;
-  if (bothParMissing &&
-      prevState->numInformSinceNonHetPar > CmdLineOpts::oneHapTransThreshold &&
-      curPartial.hetParent != prevState->hetParent) {
-    uint8_t oneHapPar = 1 - prevState->hetParent;
-    uint64_t oneHapParIV = prevState->iv & _parBits[oneHapPar];
-    // The value <_parBits[oneHapPar]> are all fixed at 1 for the IV values
-    // corresponding to <oneHapPar>, thus the result of the following indicates
-    // which bits are non-1. This should be either all but one of the children
-    // or all children except one (see below) in order for the penalty to
-    // apply.  These two options correspond, respectively, to all but one
-    // children receiving the 0 haplotype, or, all but one receiving the 1
-    // haplotype.
-    uint64_t diffFromOneHap = oneHapParIV ^ _parBits[oneHapPar];
-
-    int numDiffs = popcount(diffFromOneHap);
-    if (numDiffs == 1) {
-      penalty = diffFromOneHap;
-    }
-    else if (numDiffs == numChildren - 1) {
-      // want the penalty to be set for only 1 bit, so invert <diffFromOneHap>
-      penalty = diffFromOneHap ^ _parBits[oneHapPar];
-    }
-  }
 
   // (2) if curPartial is partly informative, for heterozygous children:
   //     (a) When two recombinations occur relative to the previous marker and
@@ -929,22 +878,12 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
   uint8_t altPhaseType = isPI * 3 + (1 - isPI);
   // Above equivalent to the line below but has no branching
   //uint8_t altPhaseType = (isPI) ? 3 : 1;
-  // Are the previous and current heterozygous parents the same?
-  uint8_t prevCurHetParSame = curPartial.hetParent == prevState->hetParent;
-  // If the current state is heterozygous for the same parent as the previous
-  // state, and if the current state is not partly informative, then we
-  // increment the number of informative positions since an informative marker
-  // for the non-heterozygous parent has been seen. Otherewise, if the marker
-  // is not partly informative, there has been one marker (the current one)
-  // since the non-het parent:
-  uint16_t numInformSinceNonHetPar = (1 - isPI) *
-		  (prevCurHetParSame * prevState->numInformSinceNonHetPar + 1);
   updateStates(fullIV, fullAmbig, fullUnassigned, ambig1Unassigned, recombs,
-	       penalty, prevState->unassigned, stdAmbigOnlyPrev, ambig1PrevInfo,
+	       prevState->unassigned, stdAmbigOnlyPrev, ambig1PrevInfo,
 	       curPartial.hetParent, curPartial.homParentGeno,
 	       /*initParPhase=default phase=*/ 0, altPhaseType, prevIdx,
-	       prevState->minRecomb, prevState->error, numInformSinceNonHetPar,
-	       IVambigPar, minMaxRec, hetParentUndefined, childrenData);
+	       prevState->minRecomb, prevState->error, IVambigPar,
+	       minMaxRec, hetParentUndefined, childrenData);
 
   // For MT_PI states, have 1 or 2 more states to examine:
   // Exception is if one of the parents doesn't have any transmitted haplotypes
@@ -980,13 +919,12 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
     // Now ready to look up or create full states with the <fullIV> and
     // <fullAmbig> values, etc.
     updateStates(fullIV, fullAmbig, fullUnassigned, ambig1Unassigned, recombs,
-		 penalty, prevState->unassigned, stdAmbigOnlyPrev,
-		 ambig1PrevInfo, /*curPartial.hetParent=*/2,
-		 /*homParentGeno=*/G_MISS, /*initParPhase=parent 0 flip=*/1,
+		 prevState->unassigned, stdAmbigOnlyPrev, ambig1PrevInfo,
+		 /*curPartial.hetParent=*/2, /*homParentGeno=*/G_MISS,
+		 /*initParPhase=parent 0 flip=*/1,
 		 /*altPhaseType=parent 1 flip=*/ 2, prevIdx,
-		 prevState->minRecomb, prevState->error,numInformSinceNonHetPar,
-		 IVambigPar, minMaxRec, /*hetParentUndefined=*/ false,
-		 childrenData);
+		 prevState->minRecomb, prevState->error, IVambigPar,
+		 minMaxRec, /*hetParentUndefined=*/ false, childrenData);
   }
 }
 
@@ -1275,21 +1213,19 @@ void Phaser::fixRecombFromAmbig(uint64_t &fullIV, uint64_t &recombs,
 // to the optimality of <prevState>.
 void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint64_t fullUnassigned, uint64_t ambig1Unassigned,
-			  uint64_t recombs, uint64_t penalty,
-			  uint64_t prevUnassigned,
+			  uint64_t recombs, uint64_t prevUnassigned,
 			  uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
 			  uint8_t hetParent, uint8_t homParentGeno,
 			  uint8_t initParPhase, uint8_t altPhaseType,
 			  int64_t prevIndex, uint16_t prevMinRecomb,
-			  uint8_t prevError, uint16_t numInformSinceNonHetPar,
-			  uint8_t IVambigPar, uint16_t minMaxRec[2],
-			  bool hetParentUndefined,
+			  uint8_t prevError, uint8_t IVambigPar,
+			  uint16_t minMaxRec[2], bool hetParentUndefined,
 			  const uint64_t childrenData[5]) {
   // How many iterations of the loop? See various comments below.
   int numIter = 2;
 
   // How many recombinations for the initial phase assignment?
-  size_t numRecombs = popcount(recombs | penalty);
+  size_t numRecombs = popcount(recombs);
   uint8_t curParPhase = initParPhase;
 
   // Note: (hetParent >> 1) == 1 iff hetParent == 2. It is 0 for the other
@@ -1353,7 +1289,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // that aren't assigned in the previous state.
     recombs ^= _parBits[ hetParent ] & ~(fullAmbig | (isPI * ambig1PrevInfo) |
 								prevUnassigned);
-    size_t curCount = popcount(recombs | penalty);
+    size_t curCount = popcount(recombs);
     if (curCount < numRecombs) {
       numRecombs = curCount;
       curParPhase = altPhaseType;
@@ -1430,7 +1366,6 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       }
       theState->ambigPrev = 0;
       theState->minRecomb = totalRecombs;
-      theState->numInformSinceNonHetPar = numInformSinceNonHetPar;
       theState->maxPrevRecomb = numRecombs;
       theState->hetParent = hetParent;
       theState->ambigParHet = 1 << hetParent;
@@ -1476,10 +1411,6 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 	theState->homParentGeno = homParentGeno;
 	theState->parentPhase = curParPhase;
       }
-
-      // Use minimum of all prior states for <numInformSinceNonHetPar>:
-      if (numInformSinceNonHetPar < theState->numInformSinceNonHetPar)
-	theState->numInformSinceNonHetPar = numInformSinceNonHetPar;
 
       theState->ambigParHet |= 1 << hetParent;
       uint8_t parPhaseBits = (1 << curParPhase) |
@@ -1659,13 +1590,6 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       // Update the various values as needed for the inverted phase in the next
       // iteration.
 
-      // TODO! missing data children and penalty?
-      // TODO! Any ambig1 issues we have a penalty at the beginning of the
-      // chromosome?
-      // TODO! back propagate penalty such that the previous marker has the
-      // induced recombination (leading to the parent having transmitted only
-      // one of their haplotypes)?
-
       // Children that have missing data should not be flipped
       // Also, for both parent het markers, heterozygous children's bits do
       // not get flipped: they're either unambigous and constrained by
@@ -1691,7 +1615,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       recombs ^= flipVal & ~(stdAmbigOnlyPrev | (isPI * ambig1PrevInfo) |
 								prevUnassigned);
       size_t oldNumRecombs = numRecombs;
-      numRecombs = popcount(recombs | penalty);
+      numRecombs = popcount(recombs);
       if (isPI && IVambigPar && theStateUpdated && oldNumRecombs == numRecombs){
 	theState->arbitraryPar = 1;
 	break;

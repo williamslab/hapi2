@@ -31,7 +31,6 @@ int   CmdLineOpts::startPos = 0;
 int   CmdLineOpts::endPos = INT_MAX;
 int   CmdLineOpts::forceWrite = 0;
 int   CmdLineOpts::max1MarkerRecomb = DEFAULT_NO_ERROR_MAX;
-int   CmdLineOpts::oneHapTransThreshold = 100;
 int   CmdLineOpts::detectCO = 0;
 int   CmdLineOpts::edgeCO = 0;
 int   CmdLineOpts::verbose = 0;
