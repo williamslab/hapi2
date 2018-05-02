@@ -1990,7 +1990,16 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
       uncertainIV |= curState->iv ^ lastAssignedIV;
     // make the transmitted haplotype assignments for all markers between the
     // current marker and the subsequent informative marker
-    for(int m = _hmmMarker[curHmmIndex] + 1; m < lastAssignedMarker; m++) {
+    int curMarker = _hmmMarker[curHmmIndex];
+    int startIndex = curMarker + 1;
+    if (curHmmIndex == 0)
+      // TODO: bug: what if there's an error at the first position and the true
+      // last marker is at curHmmIndex == 1?
+      startIndex = 0;
+    for(int m = startIndex; m < lastAssignedMarker; m++) {
+      if (m == curMarker)
+	continue; // Don't set untrans for the current marker (is PHASE_OK)
+
       const PhaseVals &phase = theFam->getPhase(m);
       assert(phase.status != PHASE_OK);
       // If the child is missing data, it should not figure into the transmitted
@@ -2024,16 +2033,6 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
       theFam->setUntransPar(m, untrans);
     }
 
-    deleteStates(_hmm[curHmmIndex]);
-
-    // ready for next iteration -- make prev into cur for states and state sets
-    curStateIdx = prevStateIdx;
-    BT_state_set *tmp = _curBTAmbigSet;
-    _curBTAmbigSet = _prevBTAmbigSet;
-    _prevBTAmbigSet = tmp;
-    _prevBTAmbigSet->clear();
-
-    lastAssignedMarker = _hmmMarker[curHmmIndex];
     // To detect untrans, we exclude samples that recombine between informative
     // positions. Because the IV values are set even for uninformative values
     // at prior markers, we'd like to propagate back the IV values here. Because
@@ -2056,6 +2055,18 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
     lastAssignedIV = (curState->iv & ~propagateMask) |
 					       (lastAssignedIV & propagateMask);
     lastIVFlip = ivFlippable;
+
+    
+    deleteStates(_hmm[curHmmIndex]);
+
+    // ready for next iteration -- make prev into cur for states and state sets
+    curStateIdx = prevStateIdx;
+    BT_state_set *tmp = _curBTAmbigSet;
+    _curBTAmbigSet = _prevBTAmbigSet;
+    _prevBTAmbigSet = tmp;
+    _prevBTAmbigSet->clear();
+
+    lastAssignedMarker = _hmmMarker[curHmmIndex];
   }
 }
 
