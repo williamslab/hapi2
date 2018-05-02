@@ -148,7 +148,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
 
   /////////////////////////////////////////////////////////////////////////////
   // Step 4: HMM analysis finished. Back trace and assign phase!
-  backtrace(theFam, bothParMissing, lastMarker);
+  backtrace(theFam, bothParMissing, firstMarker, lastMarker);
 }
 
 // Do initial setup of values used throughout phasing the current chromosome
@@ -1769,7 +1769,7 @@ void Phaser::rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 // TODO: go through and comment this and possibly refactor.
 // Back traces and minimum recombinant phase using the states in <_hmm>.
 void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
-		       int chrLastMarker) {
+		       int chrFirstMarker, int chrLastMarker) {
   int lastIndex = _hmm.length() - 1;
 
   if (lastIndex < 0)
@@ -1995,7 +1995,7 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
     if (curHmmIndex == 0)
       // TODO: bug: what if there's an error at the first position and the true
       // last marker is at curHmmIndex == 1?
-      startIndex = 0;
+      startIndex = chrFirstMarker;
     for(int m = startIndex; m < lastAssignedMarker; m++) {
       if (m == curMarker)
 	continue; // Don't set untrans for the current marker (is PHASE_OK)
