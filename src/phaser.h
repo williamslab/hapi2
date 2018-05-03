@@ -10,6 +10,12 @@
 #ifndef PHASER_H
 #define PHASER_H
 
+// Phase methods: minimum recombinant or maximum likelihood
+enum PhaseMethod {
+  PHASE_MAXLIKE,
+  PHASE_MINREC,
+};
+
 // Types of markers. We use bits set in an integer for markers that can
 // have multiple types (occurs when one or both parents are missing data)
 enum MarkerType {
@@ -102,9 +108,11 @@ class Phaser {
     static void parBitsInit(int numChildren);
     static void getFamilyData(NuclearFamily *theFam, int marker,
 			      uint8_t &parentData, uint8_t &parentGenoTypes,
-			      uint64_t childrenData[5],uint8_t &childGenoTypes);
+			      uint64_t childrenData[5], uint8_t &childGenoTypes,
+			      int &numMissChildren);
     static int  getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 			      uint8_t &homParGeno);
+    static void printMarkerType(int mt, FILE *log);
     static void makePartialStates(dynarray<State> &partialStates,
 				  int markerTypes, uint8_t parentData,
 				  uint8_t homParGeno,
@@ -117,12 +125,13 @@ class Phaser {
 				    const uint64_t childrenData[5]);
     static void makeFullStates(const dynarray<State> &partialStates, int marker,
 			       const uint64_t childrenData[5],
-			       bool bothParMissing, int numChildren);
+			       bool bothParMissing, int numChildren,
+			       int numMissChildren);
     static uint8_t isIVambigPar(const State *state, bool bothParMissing);
     static void mapPrevToFull(const State *prevState, int64_t prevIdx,
 			      const State &curPartial, uint16_t minMaxRec[2],
 			      const uint64_t childrenData[5],
-			      uint8_t IVambigPar);
+			      uint8_t IVambigPar, int numDataChildren);
     static void handlePI(const State *prevState, uint64_t &fullIV,
 			 uint64_t &fullAmbig, uint64_t &recombs,
 			 uint64_t parRecombs[2], uint64_t &propagateAmbig,
@@ -152,13 +161,17 @@ class Phaser {
 			     uint8_t hetParent, uint8_t homParentGeno,
 			     uint8_t initParPhase, uint8_t altPhaseType,
 			     int64_t prevIndex, uint16_t prevMinRecomb,
-			     uint8_t prevError, uint8_t IVambigPar,
-			     uint16_t minMaxRec[2], bool hetParentUndefined,
-			     const uint64_t childrenData[5]);
+			     float prevLikelihood, uint8_t prevError,
+			     uint8_t IVambigPar, uint16_t minMaxRec[2],
+			     bool hetParentUndefined,
+			     const uint64_t childrenData[5],
+			     int numDataChildren);
     static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
 					      uint8_t &hetParIsDiff);
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
 			       const uint64_t unassigned);
+    static void updateAmbigPrev(State *theState, int64_t prevIndex,
+				bool newBestPrev);
     static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 					  uint16_t minMaxRec[2],
 					  int numChildren);
@@ -243,6 +256,9 @@ class Phaser {
     static BT_state_set *_curBTAmbigSet;
     static BT_state_set *_prevBTAmbigSet;
 
+    // What type of phasing are we doing?
+    static PhaseMethod _phaseMethod;
+
     // Inheritance vector bits corresponding to parent 0 and 1 (indexed).
     // Index 2 corresponds to all inheritance vector bits set to 1.
     // Note these values are variable for each family depending on the number of
@@ -259,6 +275,10 @@ class Phaser {
     // comment in lookupState() which talks about the fact that there are
     // two distinct values only instead of four.
     static uint64_t _ambigFlips[4];
+
+    // For tracking information about genetic distances
+    static int _lastInformMarker;
+    static int _curMarker;
 };
 
 struct State {
@@ -318,6 +338,9 @@ struct State {
   // Note: will not ever get more than 64 recombinations from the previous
   // marker since there are 64 bits in <iv>, so cannot exceed UINT8_MAX
   uint8_t  maxPrevRecomb;
+
+  // Log likelihood of state
+  float    maxLikelihood;
 
   // Which parent is heterozygous? Either 0, 1, or 2 for both, which corresponds
   // to MT_PI states
