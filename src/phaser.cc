@@ -667,7 +667,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       newState->parentPhase = 0;
       // 1 << 0, i.e., 1 << newState->parentPhase
       newState->ambigParPhase = (1 << 0) << (2 * newState->hetParent);
-      newState->arbitraryPar = 1;
+      newState->arbitraryPar = bothParMissing;
       newState->error = 0;
       _hmm[0].append(newState);
     }
@@ -2031,7 +2031,7 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
 
     // The final hetParent value for this marker is that stored in <curState>
     // Given this value, we report to the user the ambiguous phase possibilities
-    // To access these possibilites alone (and exclude those from the other
+    // To access these possibilities alone (and exclude those from the other
     // parent, we shift and mask as follows:
     curAmbigParPhase >>= 2 * curState->hetParent;
     // Bits to include are either 2 total (value of 3) or 4 total (value of 15)
