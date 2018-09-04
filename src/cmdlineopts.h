@@ -7,8 +7,8 @@
 #ifndef CMDLINEOPTS_H
 #define CMDLINEOPTS_H
 
-#define VERSION_NUMBER	"1.87.5b"
-#define RELEASE_DATE    "2 May 2018"
+#define VERSION_NUMBER	"1.87.6b"
+#define RELEASE_DATE    "4 Sep 2018"
 
 class CmdLineOpts {
   public:
@@ -89,6 +89,14 @@ class CmdLineOpts {
 
     // Verbose log?
     static int verbose;
+
+    // How many parents (0-2) in a nuclear family must have data in order to
+    // phase the family
+    static int minNumParentsData;
+
+    // How many children in a nuclear family must have data in order to phase
+    // the family
+    static int minNumChildrenData;
 };
 
 #endif // CMDOPTIONS_H

@@ -112,16 +112,31 @@ int main(int argc, char **argv) {
   //////////////////////////////////////////////////////////////////////////
   // Have output directory and log, can go forward!
 
+  // Get list of families to be phased (based on minimum number of children and
+  // parents with data):
   dynarray<NuclearFamily *> toBePhased;
   for(NuclearFamily::fam_ht_iter iter = NuclearFamily::familyIter();
 			       iter != NuclearFamily::familyIterEnd(); iter++) {
     NuclearFamily *theFam = iter->second;
     if (theFam->numChildren() > 1) {
       int childrenWithData = 0;
+      bool shouldPhase = true; // initially assume
       for(int c = 0; c < theFam->numChildren(); c++)
 	if (theFam->_children[c]->hasData())
 	  childrenWithData++;
-      if (childrenWithData >= 2)
+      if (childrenWithData < CmdLineOpts::minNumChildrenData)
+	shouldPhase = false;
+      if (CmdLineOpts::minNumParentsData > 0) {
+	int parentsWithData = 0;
+	if (theFam->_parents->first->hasData())
+	  parentsWithData++;
+	if (theFam->_parents->second->hasData())
+	  parentsWithData++;
+	if (parentsWithData < CmdLineOpts::minNumParentsData)
+	  shouldPhase = false;
+      }
+
+      if (shouldPhase)
 	toBePhased.append(theFam);
     }
   }

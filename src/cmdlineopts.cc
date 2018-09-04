@@ -34,6 +34,8 @@ int   CmdLineOpts::max1MarkerRecomb = DEFAULT_NO_ERROR_MAX;
 int   CmdLineOpts::detectCO = 0;
 int   CmdLineOpts::edgeCO = 0;
 int   CmdLineOpts::verbose = 0;
+int   CmdLineOpts::minNumParentsData = 0;
+int   CmdLineOpts::minNumChildrenData = 2;
 
 // Parses the command line options for the program.
 bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
@@ -43,6 +45,8 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     NO_ERROR_MAX,
     DETECT_CO,
     EDGE_CO,
+    MIN_PAR,
+    MIN_CHILD,
   };
 
   static struct option const longopts[] =
@@ -70,6 +74,8 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
     {"force", no_argument, &CmdLineOpts::forceWrite, 1},
     {"verbose", no_argument, &CmdLineOpts::verbose, 1},
+    {"min_par", required_argument, NULL, MIN_PAR},
+    {"min_child", required_argument, NULL, MIN_CHILD},
     {0, 0, 0, 0}
   };
 
@@ -222,6 +228,32 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	}
 	if (edgeCO <= 0) {
 	  fprintf(stderr, "ERROR: must provide strictly positive value for edge_co option\n");
+	  haveGoodArgs = false;
+	}
+	break;
+      case MIN_PAR:
+	minNumParentsData = strtol(optarg, &endptr, 10);
+	if (errno != 0 || *endptr != '\0') {
+	  fprintf(stderr, "ERROR: unable to parse min_par option as integer\n");
+	  if (errno != 0)
+	    perror("strtol");
+	  exit(2);
+	}
+	if (minNumParentsData < 0) {
+	  fprintf(stderr, "ERROR: must provide strictly positive value for min_par option\n");
+	  haveGoodArgs = false;
+	}
+	break;
+      case MIN_CHILD:
+	minNumChildrenData = strtol(optarg, &endptr, 10);
+	if (errno != 0 || *endptr != '\0') {
+	  fprintf(stderr, "ERROR: unable to parse min_child option as integer\n");
+	  if (errno != 0)
+	    perror("strtol");
+	  exit(2);
+	}
+	if (minNumChildrenData < 2) {
+	  fprintf(stderr, "ERROR: min_child option must be 2 or greater\n");
 	  haveGoodArgs = false;
 	}
 	break;
