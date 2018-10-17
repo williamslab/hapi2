@@ -140,7 +140,15 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
 
   /////////////////////////////////////////////////////////////////////////////
   // Step 4: HMM analysis finished. Back trace and assign phase!
+  if (CmdLineOpts::verbose) {
+    fprintf(log, "  Back tracing... ");
+    fflush(log);
+  }
   backtrace(theFam, bothParMissing, firstMarker, lastMarker);
+  if (CmdLineOpts::verbose) {
+    fprintf(log, "done\n");
+    fflush(log);
+  }
 }
 
 // Do initial setup of values used throughout phasing the current chromosome
@@ -2286,7 +2294,7 @@ void Phaser::propagateBackIV(uint64_t curIV,uint64_t curAmbig, State *prevState,
 //  uint64_t oneRecomb = parRecombs[0] ^ parRecombs[1];
 //  prevState->ambig = prevStdAmbig & oneRecomb;
   // old less efficient version of updating <prevState->ambig>
-  uint64_t noRecomb = ambigToResolve - (parRecombs[0] | parRecombs[1]);
+  uint64_t noRecomb = ambigToResolve & ~(parRecombs[0] | parRecombs[1]);
   newPrevAmbig = prevState->ambig & ~(bothRecomb | noRecomb | prevAmbig1);
 }
 
