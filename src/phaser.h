@@ -181,11 +181,13 @@ class Phaser {
     static void deleteStates(dynarray<State*> &theStates);
     static void propagateBackIV(uint64_t curIV, uint64_t curAmbig,
 				State *prevState, uint64_t &newPrevIV,
-				uint64_t &newPrevAmbig);
+				uint64_t &newPrevAmbig,
+				uint8_t	&numAmbig1Recombs);
     static void collectAmbigPrevIdxs(uint64_t curIV, uint64_t curAmbig,
 				     uint8_t ambigPrev, uint32_t prevState,
 				     const dynarray<State*> &prevStates,
-				     BT_ambig_info &thePrevInfo);
+				     BT_ambig_info &thePrevInfo,
+				     uint8_t &numAmbig1Recombs);
 
 
     //////////////////////////////////////////////////////////////////
@@ -309,6 +311,12 @@ struct State {
   // informativeness of the parent's genotype, if a child is missing data,
   // the corresponding <iv> values will not be assigned and so aren't considered
   // meaningful.
+  // A more complex scenario revolves around ambig1 values. See the comments
+  // in fixRecombFromAmbig() -- if an ambig1 assignment is made and a
+  // subsequent fully informative marker has a recombination for the
+  // corresponding child, this becomes equivalent to the child having one
+  // parent unassigned so this value can be non-zero even after a partly
+  // informative marker (where both parents are heterozygous)
   uint64_t unassigned; // iv bits that haven't been assigned up to this marker
 
   // index of previous state that leads to optimal phase here

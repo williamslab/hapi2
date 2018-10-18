@@ -1024,7 +1024,7 @@ void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
   propagateAmbig |= childrenData[G_HET] & bothPrevUnassigned;
   // (3) Some newly ambiguous due to recombinations from one parent:
   uint64_t newAmbigChildren = unambigHetRecombs[1] | unambigHetRecombs[2];
-  // (4) New 1ambig children:
+  // (4) New ambig1 children:
   //     Children that are het with only one parent assigned previously are
   //     ambig1 type ambiguous (see above); mark them as such.
   //     Want only one bit set in <fullAmbig> for these children: arbitrarily
@@ -2030,10 +2030,11 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
 
       int prevHmmIndex = hmmIndex - 1 - (curState->error & 1);
       if (prevHmmIndex >= 0) {
-	BT_ambig_info dontcare;
+	BT_ambig_info dontcare1;
+	uint8_t dontcare2;
 	collectAmbigPrevIdxs(ambigIV, ambigAmbig, ambigState->ambigPrev,
 			     ambigState->prevState, _hmm[prevHmmIndex],
-			     dontcare);
+			     dontcare1, dontcare2);
       }
     }
 
@@ -2068,9 +2069,10 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
       }
 
       BT_ambig_info prevStateInfo;
+      uint8_t numAmbig1Recombs;
       collectAmbigPrevIdxs(curState->iv, curState->ambig, curState->ambigPrev,
 			   curState->prevState, _hmm[hmmIndex-1],
-			   prevStateInfo);
+			   prevStateInfo, numAmbig1Recombs);
 
       prevStateIdx = prevStateInfo.stateIdx;
       State *prevState = _hmm[hmmIndex-1][prevStateIdx];
@@ -2078,18 +2080,18 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
       prevState->ambig = prevStateInfo.ambig;
       // TODO: optimization: remove entry for prevStateInfo from _prevBTAmbig
 
-      // Keeping the following comment and code, but the value
-      // <curState->maxPrevRecomb> has the same value that was calculated by
-      // the old code
-      // Note: this number may be off by 1 for any ambig1 values. If we end
-      // up flipping both bits for ambig1 values (via <bothRecomb> above),
-      // the <iv> values will look like there are 0 recombinations relative
-      // to <prevState>, but <curState->minRecomb> will encode 1
-      // recombination.  This 1 recombination occurs earlier at the
-      // establishment of the ambig1 <iv> value.
+      // Both the following are equivalent, but now we do something different
+      // as noted next
 //      numRecombs = curState->minRecomb - prevState->minRecomb -
 //			  (curState->error & 1) * CmdLineOpts::max1MarkerRecomb;
-      numRecombs = curState->maxPrevRecomb;
+//      numRecombs = curState->maxPrevRecomb;
+      // Changes in IV when a child is ambig1 induce a recombination that is
+      // counted at a later marker than it originally occurred. The
+      // <numAmbig1Recombs> counts the number of such recombinations that must
+      // be attributed to an earlier marker to be consistent with the changes
+      // in IV values:
+      prevState->maxPrevRecomb += numAmbig1Recombs;
+      numRecombs = curState->maxPrevRecomb - numAmbig1Recombs;
     }
     else
       numRecombs = 0;
@@ -2255,7 +2257,8 @@ void Phaser::deleteStates(dynarray<State*> &theStates) {
 // Returns (via parameters) the updated <iv> and <ambig> values: <newPrevIV> and
 // <newPrevAmbig>.
 void Phaser::propagateBackIV(uint64_t curIV,uint64_t curAmbig, State *prevState,
-			     uint64_t &newPrevIV, uint64_t &newPrevAmbig) {
+			     uint64_t &newPrevIV, uint64_t &newPrevAmbig,
+			     uint8_t &numAmbig1Recombs) {
   // TODO: potential optimization: don't execute if <prevState->unassigned> == 0
   // and <prevState->ambig> == 0
 
@@ -2296,6 +2299,11 @@ void Phaser::propagateBackIV(uint64_t curIV,uint64_t curAmbig, State *prevState,
   // old less efficient version of updating <prevState->ambig>
   uint64_t noRecomb = ambigToResolve & ~(parRecombs[0] | parRecombs[1]);
   newPrevAmbig = prevState->ambig & ~(bothRecomb | noRecomb | prevAmbig1);
+
+  // count the number of ambig1 recombinations that were resolved; we will
+  // ensure that the real location of the crossover gets this count, not
+  // some later marker
+  numAmbig1Recombs = popcount(bothRecomb & prevAmbig1 & _parBits[0]);
 }
 
 // Inserts BT_ambig_info objects for prevoius states in <curState->prevState>
@@ -2318,16 +2326,15 @@ void Phaser::propagateBackIV(uint64_t curIV,uint64_t curAmbig, State *prevState,
 void Phaser::collectAmbigPrevIdxs(uint64_t curIV, uint64_t curAmbig,
 				  uint8_t ambigPrev, uint32_t prevState,
 				  const dynarray<State*> &prevStates,
-				  BT_ambig_info &thePrevInfo) {
-  const uint32_t mask = (1 << 6) - 1;
-
+				  BT_ambig_info &thePrevInfo,
+				  uint8_t &numAmbig1Recombs) {
   switch (ambigPrev) {
     case 0: // only one
       {
 	uint32_t thePrevStateIdx = prevState;
 	uint64_t prevIV, prevAmbig;
 	propagateBackIV(curIV, curAmbig, prevStates[thePrevStateIdx],
-			prevIV, prevAmbig);
+			prevIV, prevAmbig, numAmbig1Recombs);
 	thePrevInfo.stateIdx = thePrevStateIdx;
 	thePrevInfo.iv = prevIV;
 	thePrevInfo.ambig = prevAmbig;
@@ -2337,13 +2344,14 @@ void Phaser::collectAmbigPrevIdxs(uint64_t curIV, uint64_t curAmbig,
 
     case 1: // multiple previous states in <prevState>: add all
       {
+	const uint32_t mask = (1 << 6) - 1;
 	uint32_t prevs = prevState;
 
 	// Set the first index as the previous state according to our convention
 	uint32_t thePrevStateIdx = prevs & mask;
 	uint64_t prevIV, prevAmbig;
 	propagateBackIV(curIV, curAmbig, prevStates[ thePrevStateIdx ],
-			prevIV, prevAmbig);
+			prevIV, prevAmbig, numAmbig1Recombs);
 	thePrevInfo.stateIdx = thePrevStateIdx;
 	thePrevInfo.iv = prevIV;
 	thePrevInfo.ambig = prevAmbig;
@@ -2354,8 +2362,9 @@ void Phaser::collectAmbigPrevIdxs(uint64_t curIV, uint64_t curAmbig,
 	// ambigous prevous states are dealt with.
 	for(int shift = 6; shift < 30 && prevs-1 > 0; shift += 6) {
 	  uint32_t curPrevIdx = prevs & mask;
+	  uint8_t dontcare; // numAmbig1Recombs will default to first prev state
 	  propagateBackIV(curIV, curAmbig, prevStates[ curPrevIdx ],
-			  prevIV, prevAmbig);
+			  prevIV, prevAmbig, dontcare);
 	  BT_ambig_info values(curPrevIdx, prevIV, prevAmbig);
 	  _prevBTAmbigSet->insert( values );
 	  prevs >>= 6;
@@ -2369,7 +2378,7 @@ void Phaser::collectAmbigPrevIdxs(uint64_t curIV, uint64_t curAmbig,
 	uint32_t thePrevStateIdx = prevs[0];
 	uint64_t prevIV, prevAmbig;
 	propagateBackIV(curIV, curAmbig, prevStates[ thePrevStateIdx ],
-			prevIV, prevAmbig);
+			prevIV, prevAmbig, numAmbig1Recombs);
 	thePrevInfo.stateIdx = thePrevStateIdx;
 	thePrevInfo.iv = prevIV;
 	thePrevInfo.ambig = prevAmbig;
@@ -2377,8 +2386,9 @@ void Phaser::collectAmbigPrevIdxs(uint64_t curIV, uint64_t curAmbig,
 
 	for(int i = 1; i < prevs.length(); i++) {
 	  uint32_t curPrevIdx = prevs[i];
+	  uint8_t dontcare; // numAmbig1Recombs will default to first prev state
 	  propagateBackIV(curIV, curAmbig, prevStates[ curPrevIdx ],
-			  prevIV, prevAmbig);
+			  prevIV, prevAmbig, dontcare);
 	  BT_ambig_info values(curPrevIdx, prevIV, prevAmbig);
 	  _prevBTAmbigSet->insert( values );
 	}
