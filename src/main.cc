@@ -187,7 +187,7 @@ int main(int argc, char **argv) {
 	      parentIds[0], parentIds[1]);
     }
 
-    FILE *resultsFiles[6];
+    FILE *resultsFiles[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
     for(int chrIdx = 0; chrIdx < numChrs; chrIdx++) {
       bool shouldPhase = openFilesToWrite(filename, resultsFiles, chrIdx,
 			  parentIds, famIdLen,
@@ -304,7 +304,6 @@ bool openFilesToWrite(char *&filename, FILE *resultsFiles[6], int chrIdx,
   // Do we want separate files for each chromsome? Not for all file types
   const bool separateChrs[6] = { true, true, true, false, false, false };
   for(int o = 0; o < 6; o++) {
-    resultsFiles[o] = NULL;
     if (!separateChrs[o] && chrIdx != 0)
       // Will only open the single file corresponding to this file type once,
       // so skip now that we're past the first chromosome
