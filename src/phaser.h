@@ -131,7 +131,13 @@ class Phaser {
     static void mapPrevToFull(const State *prevState, int64_t prevIdx,
 			      const State &curPartial, uint16_t minMaxRec[2],
 			      const uint64_t childrenData[5],
-			      uint8_t IVambigPar, int numDataChildren);
+			      uint8_t IVambigPar, uint8_t missingPar,
+			      int numDataChildren, int numMarkersSincePrev);
+    static void checkPenalty(const State *prevState, const State &curPartial,
+			     uint8_t isPI, uint8_t missingPar,
+			     int numMarkersSincePrev, uint64_t &penalty,
+			     int16_t &numMarkersSinceNonHetPar,
+			     int16_t &numMarkersSinceOneHetPar);
     static void handlePI(const State *prevState, uint64_t &fullIV,
 			 uint64_t &fullAmbig, uint64_t &recombs,
 			 uint64_t parRecombs[2], uint64_t &propagateAmbig,
@@ -156,16 +162,16 @@ class Phaser {
 				   uint64_t &ambig1Unassigned);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t ambig1Unassigned,
-			     uint64_t recombs, uint64_t prevUnassigned,
-			     uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
-			     uint8_t hetParent, uint8_t homParentGeno,
-			     uint8_t initParPhase, uint8_t altPhaseType,
-			     int64_t prevIndex, uint16_t prevMinRecomb,
-			     float prevLikelihood, uint8_t prevError,
+			     uint64_t recombs, uint64_t penalty,
+			     const State *prevState, uint64_t stdAmbigOnlyPrev,
+			     uint64_t ambig1PrevInfo, uint8_t hetParent,
+			     uint8_t homParentGeno, uint8_t initParPhase,
+			     uint8_t altPhaseType, int64_t prevIndex,
 			     uint8_t IVambigPar, uint16_t minMaxRec[2],
 			     bool hetParentUndefined,
-			     const uint64_t childrenData[5],
-			     int numDataChildren);
+			     const uint64_t childrenData[5],int numDataChildren,
+			     int16_t numMarkersSinceNonHetPar,
+			     int16_t numMarkersSinceOneHetPar);
     static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
 					      uint8_t &hetParIsDiff);
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
@@ -338,6 +344,26 @@ struct State {
   // Minimum number of recombinations to reach this state
   // TODO: add checks to ensure we never reach UINT16_MAX?
   uint16_t minRecomb;
+
+  // For detecting cases where a parent without data has transmitted only one
+  // haplotype to all children. Stores the number of markers (including
+  // uninformative markers) since the last state that can reach this one that
+  // was heterozygous for the parent in question.
+  // This is signed and set to be negative when the penalty associated with
+  // treating the IV as if all children had the same haplotype has been applied.
+  int16_t numMarkersSinceNonHetPar;
+
+  // For detecting cases where the children's IVs have been swapped from a
+  // parent for which we have data to a parent without data. This manifests
+  // as a series of markers that are either uninformative or where both parents
+  // are heterozygous (since sites where the true heterozygous parent are
+  // modeled as if they're heterozygous for the missing data parent).
+  // Stores the number of markers since the last state that can reach this one
+  // that was heterozygous for only one parent.
+  // This is signed and set to be negative when the penalty applied to states
+  // where both parents are heterozygous over a long stretch (which in practice
+  // deletes that state path).
+  int16_t numMarkersSinceOneHetPar;
 
   // We prefer to back trace to states that have recombinations immediately
   // before the current state as opposed to earlier. In general this decision
