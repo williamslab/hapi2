@@ -125,9 +125,9 @@ class Phaser {
 				    const uint64_t childrenData[5]);
     static void makeFullStates(const dynarray<State> &partialStates, int marker,
 			       const uint64_t childrenData[5],
-			       bool bothParMissing, int numChildren,
+			       uint8_t missingPar, int numChildren,
 			       int numMissChildren);
-    static uint8_t isIVambigPar(const State *state, bool bothParMissing);
+    static uint8_t isIVambigPar(const State *state, uint8_t missingPar);
     static void mapPrevToFull(const State *prevState, int64_t prevIdx,
 			      const State &curPartial, uint16_t minMaxRec[2],
 			      const uint64_t childrenData[5],
@@ -175,7 +175,7 @@ class Phaser {
     static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 					  uint16_t minMaxRec[2],
 					  int numChildren);
-    static void backtrace(NuclearFamily *theFam, bool bothParMissing,
+    static void backtrace(NuclearFamily *theFam, uint8_t missingPar,
 			  int chrFirstMarker, int chrLastMarker);
     static uint32_t findMinStates(dynarray<State*> &theStates);
     static void deleteStates(dynarray<State*> &theStates);

@@ -54,8 +54,12 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
   _ambigPrevLists.clear();
   parBitsInit(numChildren);
 
-  bool bothParMissing = !(theFam->_parents->first->hasData() ||
-					   theFam->_parents->second->hasData());
+  // bit vector with bit 0: dad, bit 1: mom
+  uint8_t missingPar = 0;
+  if (!theFam->_parents->first->hasData())
+    missingPar += 1;
+  if (!theFam->_parents->second->hasData())
+    missingPar += 2;
 
   dynarray<State> partialStates;
   _lastInformMarker = -1;
@@ -126,7 +130,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
     // Simultaneously calculate the minimum recombination counts for each state
     // and identify which previous state(s) produce that minimum count (i.e.,
     // perform count-based Viterbi calculation)
-    makeFullStates(partialStates, _curMarker, childrenData, bothParMissing,
+    makeFullStates(partialStates, _curMarker, childrenData, missingPar,
 		   numChildren, numMissChildren);
 
     // Clean up for next marker
@@ -144,7 +148,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
     fprintf(log, "  Back tracing... ");
     fflush(log);
   }
-  backtrace(theFam, bothParMissing, firstMarker, lastMarker);
+  backtrace(theFam, missingPar, firstMarker, lastMarker);
   if (CmdLineOpts::verbose) {
     fprintf(log, "done\n");
     fflush(log);
@@ -640,7 +644,7 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
 // generates all full states. Stores these as the last value in <_hmm> and
 // stores the marker index <marker> that these states apply to in <_hmmMarker>.
 void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
-			    const uint64_t childrenData[5], bool bothParMissing,
+			    const uint64_t childrenData[5], uint8_t missingPar,
 			    int numChildren, int numMissChildren) {
   // The new entry in <_hmm> corresponds to <marker>:
   _hmmMarker.append(marker);
@@ -654,7 +658,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
     for(int i = 0; i < len; i++) {
       if (i == 1 && partialStates[1].hetParent == 1
 		 && partialStates[0].hetParent == 0
-		 && bothParMissing)
+		 && missingPar == 3)
 	// For the very first marker, if we're not sure which parent is
 	// heterozygous, and both are missing data, arbitrarily pick parent
 	// 0 as such. Otherwise, since the two states are equivalent but
@@ -675,7 +679,8 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       newState->parentPhase = 0;
       // 1 << 0, i.e., 1 << newState->parentPhase
       newState->ambigParPhase = (1 << 0) << (2 * newState->hetParent);
-      newState->arbitraryPar = bothParMissing;
+      // arbitrary if both parents are missing:
+      newState->arbitraryPar = missingPar == 3;
       newState->error = 0;
       _hmm[0].append(newState);
     }
@@ -700,7 +705,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 
     // See comment above the isIVambigPar() method. We deal with
     // <IVambigPar> == 1 below and in updateStates()
-    uint8_t IVambigPar = isIVambigPar(prevState, bothParMissing);
+    uint8_t IVambigPar = isIVambigPar(prevState, missingPar);
 
     for(int curIdx = 0; curIdx < numPartial; curIdx++) {
       const State &curPartial = partialStates[curIdx];
@@ -734,7 +739,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 
       // See comment above the isIVambigPar() method. We deal with
       // <IVambigPar> == 1 below and in updateStates()
-      uint8_t IVambigPar = isIVambigPar(back2State, bothParMissing);
+      uint8_t IVambigPar = isIVambigPar(back2State, missingPar);
 
       for(int curIdx = 0; curIdx < numPartial; curIdx++) {
 	const State &curPartial = partialStates[curIdx];
@@ -753,19 +758,19 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 }
 
 // If the IV values transmitted to each child by the two parents are either all
-// identical or all opposite, then when <bothParMissing>, which parent is
-// heterozygous (for FI markers) will be ambiguous. Additionally, a
+// identical or all opposite, then when <missingPar> == 3 (both missing), which
+// parent is heterozygous (for FI markers) will be ambiguous. Additionally, a
 // recombination at a PI state that follows these ambiguous markers will have
 // two parent phase assignments (opposite each other) that will produce
 // equivalent numbers of recombinations.
-uint8_t Phaser::isIVambigPar(const State *state, bool bothParMissing) {
+uint8_t Phaser::isIVambigPar(const State *state, uint8_t missingPar) {
   uint64_t IVparDiff = (state->iv & _parBits[0]) ^
 					      ((state->iv & _parBits[1]) >> 1);
   // Omit differences at standard ambiguous positions (not only bit 0 in each
   // child is set if there's a difference)
   uint64_t stdAmbig = (state->ambig & _parBits[1]) >> 1;
   IVparDiff &= ~stdAmbig;
-  if (bothParMissing && (IVparDiff == 0 ||
+  if (missingPar == 3 && (IVparDiff == 0 ||
 					IVparDiff == (_parBits[0] & ~stdAmbig)))
     return 1;
 
@@ -1899,7 +1904,7 @@ void Phaser::rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 
 // TODO: go through and comment this and possibly refactor.
 // Back traces and minimum recombinant phase using the states in <_hmm>.
-void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
+void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 		       int chrFirstMarker, int chrLastMarker) {
   // TODO! maximum likelihood-based back tracing code
 
@@ -1922,7 +1927,7 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
   // assignments are no longer ambiguous. That state is the point at which
   // the arbitrary parent assignment starts.
   bool parArbitraryRun = false;
-  if (_curBTAmbigSet->size() == 1 && bothParMissing) {
+  if (_curBTAmbigSet->size() == 1 && missingPar == 3) {
     state_set_iter it = _curBTAmbigSet->begin();
 
     // Parent heterozygosity is necessarily ambiguous when:
@@ -1992,7 +1997,7 @@ void Phaser::backtrace(NuclearFamily *theFam, bool bothParMissing,
       uint64_t ivDiffBits = curState->iv ^ ambigIV;
 
       if (parArbitraryRun && (ivDiffBits > 0 || curState->ambig !=ambigAmbig)) {
-	// Only remains arbitrary if the following coditions hold (see longer
+	// Only remains arbitrary if the following conditions hold (see longer
 	// comment above when parArbtitrary run is first set true)
 	// (1) All differing bits different for both parents?
 	// (2) All non-diff (same) bits the opposite of each other in the IV?
