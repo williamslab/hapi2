@@ -14,11 +14,12 @@
 #include "phaser.h"
 #include "analysis.h"
 
-void createOutDir();
-bool openFilesToWrite(char *&filename, FILE *resultsFiles[6], int chrIdx,
-		      const char *parentIds[2], int famIdLen, int totalFileLen,
-		      int &allocFilenameLen, FILE *log);
-bool checkIfFileExists(char *filename, bool printWarning);
+void  createOutDir();
+FILE *setupJsonOutput(char *filename, FILE **outs);
+bool  openFilesToWrite(char *&filename, FILE *resultsFiles[6], int chrIdx,
+		       const char *parentIds[2], int famIdLen, int totalFileLen,
+		       int &allocFilenameLen, FILE *log);
+bool  checkIfFileExists(char *filename, bool printWarning);
 
 int main(int argc, char **argv) {
   bool success = CmdLineOpts::parseCmdLineOptions(argc, argv);
@@ -81,6 +82,9 @@ int main(int argc, char **argv) {
     if (CmdLineOpts::txtOutput) {
       fprintf(out, "  Text format haplotypes\n");
     }
+    if (CmdLineOpts::jsonParOutput) {
+      fprintf(out, "  JSON format parent haplotypes\n");
+    }
     if (CmdLineOpts::ivOutput) {
       fprintf(out, "  Inheritance vectors for all markers\n");
     }
@@ -108,6 +112,9 @@ int main(int argc, char **argv) {
 				 /*bulkData=*/ true);
 
   createOutDir();
+
+  FILE *jsonParFile = (CmdLineOpts::jsonParOutput) ?
+			  setupJsonOutput(filename, outs) : NULL;
 
   //////////////////////////////////////////////////////////////////////////
   // Have output directory and log, can go forward!
@@ -193,6 +200,7 @@ int main(int argc, char **argv) {
 			  parentIds, famIdLen,
 			  /*totalFileLen=*/ prefixLen + famSpecificFileLen,
 			  allocFilenameLen, log);
+      shouldPhase = shouldPhase || jsonParFile;
 
       if (!shouldPhase) {
 	for(int o = 0; o < 2; o++) {
@@ -232,6 +240,11 @@ int main(int argc, char **argv) {
       fclose(resultsFiles[3]);
       fclose(resultsFiles[4]);
     }
+    if (CmdLineOpts::jsonParOutput && jsonParFile) {
+      if (f > 0)
+	fprintf(jsonParFile, ","); // need comma between each JSON entry
+      theFam->printHapJsonPar(jsonParFile);
+    }
     theFam->deletePhase();
 
     numFinished++;
@@ -246,6 +259,11 @@ int main(int argc, char **argv) {
   fprintf(log, "\n");
 
   fclose(log);
+
+  if (jsonParFile) {
+    fprintf(jsonParFile, "}\n");
+    fclose(jsonParFile);
+  }
 
 //  Marker::cleanUp();
 //  PersonIO<PersonBulk>::cleanUp();
@@ -279,6 +297,61 @@ void createOutDir() {
       exit(1);
     }
   }
+}
+
+// Open and print the meta data for JSON haplotype output
+FILE *setupJsonOutput(char *filename, FILE **outs) {
+  FILE *out = NULL;
+
+  sprintf(filename, "%s/parent_phase.json", CmdLineOpts::outPrefix);
+  bool okToWrite = checkIfFileExists(filename, CmdLineOpts::forceWrite);
+  if (okToWrite) {
+    out = fopen(filename, "w");
+    if (!out) {
+      fprintf(stderr, "ERROR: couldn't open %s for writing!\n", filename);
+      perror("open");
+      fprintf(outs[1], "ERROR: couldn't open %s for writing!\n", filename);
+      fprintf(outs[1], "open: %s\n", strerror(errno));
+    }
+  }
+
+  if (!out) {
+    bool nonJsonOutput = CmdLineOpts::txtOutput || CmdLineOpts::pedOutput ||
+			 CmdLineOpts::vcfOutput || CmdLineOpts::ivOutput ||
+			 CmdLineOpts::detectCO;
+    if (!nonJsonOutput) {
+      // No output possible: exit
+      for(int o = 0; o < 2; o++) {
+	FILE *out = outs[o];
+	fprintf(out, "Unable to write any output: will not phase\n");
+      }
+      exit(5);
+    }
+  }
+  else {
+    // Marker ids:
+    fprintf(out, "{\"marker\":[");
+    fprintf(out, "\"%s\"", Marker::getMarker(0)->getName());
+    for(int m = 1; m < Marker::getNumMarkers(); m++)
+      fprintf(out, ",\"%s\"", Marker::getMarker(m)->getName());
+    fprintf(out, "],");
+
+    // Physical positions:
+    fprintf(out, "\"physpos\":[");
+    fprintf(out, "%d", Marker::getMarker(0)->getPhysPos());
+    for(int m = 1; m < Marker::getNumMarkers(); m++)
+      fprintf(out, ",%d", Marker::getMarker(m)->getPhysPos());
+    fprintf(out, "],");
+
+    // Chromosome names:
+    fprintf(out, "\"chr\":[");
+    fprintf(out, "\"%s\"", Marker::getMarker(0)->getChromName());
+    for(int m = 1; m < Marker::getNumMarkers(); m++)
+      fprintf(out, ",\"%s\"", Marker::getMarker(m)->getChromName());
+    fprintf(out, "],");
+  }
+
+  return out;
 }
 
 // Attempts to open the files to be printed to, and alerts the user if any
