@@ -349,6 +349,14 @@ FILE *setupJsonOutput(char *filename, FILE **outs) {
     for(int m = 1; m < Marker::getNumMarkers(); m++)
       fprintf(out, ",\"%s\"", Marker::getMarker(m)->getChromName());
     fprintf(out, "],");
+
+    // Chromosome starts:
+    fprintf(out, "\"chrstr\":{");
+    fprintf(out, "\"%s\":0", Marker::getMarker(0)->getChromName());
+    for(int chrIdx = 1; chrIdx < Marker::getNumChroms(); chrIdx++)
+      fprintf(out, ",\"%s\":%d", Marker::getChromName(chrIdx),
+	      Marker::getFirstMarkerNum(chrIdx));
+    fprintf(out, "},");
   }
 
   return out;
