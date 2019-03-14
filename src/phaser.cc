@@ -1098,6 +1098,7 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
       // else: numMarkersSinceNonHetPar == 0 (assigned in caller)
     }
   }
+
   if (isPI && missingPar < 3 && prevState->numMarkersSinceOneHetPar >= 0) {
     // Case where we have data for one parent; attempt to detect switch in
     // which parent is which
@@ -2207,6 +2208,11 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
     // case.
     uint64_t ivFlippable = 0;
 
+    uint8_t curHomParGeno = curState->homParentGeno;
+    // above only valid for one parent het states:
+    bool homParGenoAssigned = curState->hetParent < 2;
+    uint8_t ambigHomParGeno = 0;
+
     // Find all the possible parent phase types that are have equal and minimal
     // numbers of recombinations at this marker and append their previous states
     // to <_prevIdxSet>.
@@ -2248,6 +2254,13 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 	curArbitraryPar |= ambigState->arbitraryPar;
       }
 
+      if (ambigState->hetParent < 2) {
+	if (!homParGenoAssigned)
+	  curHomParGeno = ambigState->homParentGeno;
+	else
+	  ambigHomParGeno |= curHomParGeno ^ ambigState->homParentGeno;
+      }
+
       // Add the previous state index(es) to <_prevIdxSet> so long as the
       // ambiguous state has the same error status as the current state.
       // They are allowed in fact to have different error statuses (i.e., 0 and
@@ -2271,17 +2284,9 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
       }
     }
 
-    // The final hetParent value for this marker is that stored in <curState>
-    // Given this value, we report to the user the ambiguous phase possibilities
-    // To access these possibilities alone (and exclude those from the other
-    // parent, we shift and mask as follows:
-    curAmbigParPhase >>= 2 * curState->hetParent;
-    // Bits to include are either 2 total (value of 3) or 4 total (value of 15)
-    // The latter only applies when <curState->hetParent> == 2, or <isPI>, so:
-    uint8_t isPI = curState->hetParent >> 1;
-    curAmbigParPhase &= isPI * 15 + (1-isPI) * 3;
     // Remove any ambig par phase types that have equivalent phase to <curState>
-    curAmbigParPhase -= 1 << curState->parentPhase;
+    curAmbigParPhase -= (1 << curState->parentPhase) << 2 * curState->hetParent;
+    // Remove any ambig par het types that are equivalent to <curState>
     curAmbigParHet -= 1 << curState->hetParent;
 
     // In the previous state, resolve ambiguous <iv> values and propagate
@@ -2337,7 +2342,7 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 					  ~((childrenData & _parBits[1]) >> 1);
     theFam->setPhase(_hmmMarker[curHmmIndex], curState->iv,
 		     curState->ambig & _parBits[1], missing, ivFlippable,
-		     parMissing, curState->hetParent, curState->homParentGeno,
+		     parMissing, curState->hetParent, curHomParGeno,
 		     curState->parentPhase, numRecombs, curAmbigParHet,
 		     curAmbigParPhase, curArbitraryPar);
 
