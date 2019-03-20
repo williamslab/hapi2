@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <string.h>
 #include <zlib.h>
+#include <vector>
 #include <genetio/marker.h>
 #include <genetio/personbulk.h>
 #include <genetio/personio.h>
@@ -16,6 +17,7 @@
 
 void  createOutDir();
 FILE *setupJsonOutput(char *filename, FILE **outs);
+void  getFamiliesToBePhased(FILE *log, dynarray<NuclearFamily *> &toBePhased);
 bool  openFilesToWrite(char *&filename, FILE *resultsFiles[6], int chrIdx,
 		       const char *parentIds[2], int famIdLen, int totalFileLen,
 		       int &allocFilenameLen, FILE *log);
@@ -122,31 +124,7 @@ int main(int argc, char **argv) {
   // Get list of families to be phased (based on minimum number of children and
   // parents with data):
   dynarray<NuclearFamily *> toBePhased;
-  for(NuclearFamily::fam_ht_iter iter = NuclearFamily::familyIter();
-			       iter != NuclearFamily::familyIterEnd(); iter++) {
-    NuclearFamily *theFam = iter->second;
-    if (theFam->numChildren() > 1) {
-      int childrenWithData = 0;
-      bool shouldPhase = true; // initially assume
-      for(int c = 0; c < theFam->numChildren(); c++)
-	if (theFam->_children[c]->hasData())
-	  childrenWithData++;
-      if (childrenWithData < CmdLineOpts::minNumChildrenData)
-	shouldPhase = false;
-      if (CmdLineOpts::minNumParentsData > 0) {
-	int parentsWithData = 0;
-	if (theFam->_parents->first->hasData())
-	  parentsWithData++;
-	if (theFam->_parents->second->hasData())
-	  parentsWithData++;
-	if (parentsWithData < CmdLineOpts::minNumParentsData)
-	  shouldPhase = false;
-      }
-
-      if (shouldPhase)
-	toBePhased.append(theFam);
-    }
-  }
+  getFamiliesToBePhased(log, toBePhased);
 
   int numFamsToBePhased = toBePhased.length();
 
@@ -361,6 +339,72 @@ FILE *setupJsonOutput(char *filename, FILE **outs) {
 
   return out;
 }
+
+// Get list of families to be phased based on minimum number of children and
+// parents with data
+void getFamiliesToBePhased(FILE * log, dynarray<NuclearFamily *> &toBePhased) {
+  std::vector<int> counts[3]; // for 0, 1, 2 parents
+
+  for(int p = 0; p < 3; p++)
+    // note: current limit is 32 children (in phaser.cc)
+    for(int c = 0; c <= 32; c++)
+      counts[p].push_back(0);
+
+  for(NuclearFamily::fam_ht_iter iter = NuclearFamily::familyIter();
+			       iter != NuclearFamily::familyIterEnd(); iter++) {
+    NuclearFamily *theFam = iter->second;
+    if (theFam->numChildren() > 1) {
+      bool shouldPhase = true; // initially assume
+
+      int childrenWithData = 0;
+      for(int c = 0; c < theFam->numChildren(); c++)
+	if (theFam->_children[c]->hasData())
+	  childrenWithData++;
+
+      if (childrenWithData < CmdLineOpts::minNumChildrenData)
+	shouldPhase = false;
+
+      if (childrenWithData > 32) {
+	fflush(stdout);
+	fprintf(stderr, "\n");
+	fprintf(stderr, "ERROR: cannot phase more than 32 children in a family.\n");
+	fprintf(stderr, "       changing to >64 bits for inheritance vectors would fix this\n");
+	exit(9);
+      }
+
+      int parentsWithData = 0;
+      if (theFam->_parents->first->hasData())
+	parentsWithData++;
+      if (theFam->_parents->second->hasData())
+	parentsWithData++;
+
+      if (CmdLineOpts::minNumParentsData > 0 &&
+			      parentsWithData < CmdLineOpts::minNumParentsData)
+	shouldPhase = false;
+
+      counts[parentsWithData][childrenWithData]++;
+
+      if (shouldPhase)
+	toBePhased.append(theFam);
+    }
+  }
+
+  bool headerPrinted = false;
+  for(int p = 0; p < 3; p++) {
+    for(int c = 0; c <= 32; c++) {
+      if (counts[p][c] > 0) {
+	if (!headerPrinted) {
+	  fprintf(log, "\nN_parents\tN_child\tCount\n");
+	  fprintf(log, "------------------------------------------\n");
+	  headerPrinted = true;
+	}
+	fprintf(log, "%d\t%d\t%d\n", p, c, counts[p][c]);
+      }
+    }
+  }
+  fprintf(log, "\n");
+}
+
 
 // Attempts to open the files to be printed to, and alerts the user if any
 // exist. Returns true if at least one output file exists
