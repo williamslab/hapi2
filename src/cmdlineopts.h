@@ -7,8 +7,8 @@
 #ifndef CMDLINEOPTS_H
 #define CMDLINEOPTS_H
 
-#define VERSION_NUMBER	"1.88.3b"
-#define RELEASE_DATE    "14 Mar 2019"
+#define VERSION_NUMBER	"1.88.4b"
+#define RELEASE_DATE    " 6 Apr 2019"
 
 class CmdLineOpts {
   public:
@@ -46,6 +46,9 @@ class CmdLineOpts {
 
     // Print vcf format haplotypes?
     static int vcfOutput;
+
+    // Print JSON format haplotypes?
+    static int jsonOutput;
 
     // Print JSON format parent haplotypes?
     static int jsonParOutput;

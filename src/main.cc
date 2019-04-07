@@ -16,7 +16,8 @@
 #include "analysis.h"
 
 void  createOutDir();
-FILE *setupJsonOutput(char *filename, FILE **outs);
+FILE *setupJsonOutput(const char *jsonOutName, char *filename, FILE **outs,
+		      bool noOtherJson);
 void  getFamiliesToBePhased(FILE *log, dynarray<NuclearFamily *> &toBePhased);
 bool  openFilesToWrite(char *&filename, FILE *resultsFiles[6], int chrIdx,
 		       const char *parentIds[2], int famIdLen, int totalFileLen,
@@ -84,6 +85,9 @@ int main(int argc, char **argv) {
     if (CmdLineOpts::txtOutput) {
       fprintf(out, "  Text format haplotypes\n");
     }
+    if (CmdLineOpts::jsonOutput) {
+      fprintf(out, "  JSON format haplotypes\n");
+    }
     if (CmdLineOpts::jsonParOutput) {
       fprintf(out, "  JSON format parent haplotypes\n");
     }
@@ -116,7 +120,13 @@ int main(int argc, char **argv) {
   createOutDir();
 
   FILE *jsonParFile = (CmdLineOpts::jsonParOutput) ?
-			  setupJsonOutput(filename, outs) : NULL;
+			  setupJsonOutput("parent_phase.json", filename, outs,
+			      /*noOtherJson=*/ !CmdLineOpts::jsonOutput) :
+			  NULL;
+  FILE *jsonFile = (CmdLineOpts::jsonOutput) ?
+			  setupJsonOutput("all.json", filename, outs,
+			      /*noOtherJson=*/ !jsonParFile) :
+			  NULL;
 
   //////////////////////////////////////////////////////////////////////////
   // Have output directory and log, can go forward!
@@ -178,7 +188,7 @@ int main(int argc, char **argv) {
 			  parentIds, famIdLen,
 			  /*totalFileLen=*/ prefixLen + famSpecificFileLen,
 			  allocFilenameLen, log);
-      shouldPhase = shouldPhase || jsonParFile;
+      shouldPhase = shouldPhase || jsonParFile || jsonFile;
 
       if (!shouldPhase) {
 	for(int o = 0; o < 2; o++) {
@@ -221,7 +231,12 @@ int main(int argc, char **argv) {
     if (CmdLineOpts::jsonParOutput && jsonParFile) {
       if (f > 0)
 	fprintf(jsonParFile, ","); // need comma between each JSON entry
-      theFam->printHapJsonPar(jsonParFile);
+      theFam->printHapJson(jsonParFile, /*withChildren=*/ false);
+    }
+    if (CmdLineOpts::jsonOutput && jsonFile) {
+      if (f > 0)
+	fprintf(jsonFile, ","); // need comma between each JSON entry
+      theFam->printHapJson(jsonFile, /*withChildren=*/ true);
     }
     theFam->deletePhase();
 
@@ -241,6 +256,10 @@ int main(int argc, char **argv) {
   if (jsonParFile) {
     fprintf(jsonParFile, "}\n");
     fclose(jsonParFile);
+  }
+  if (jsonFile) {
+    fprintf(jsonFile, "}\n");
+    fclose(jsonFile);
   }
 
 //  Marker::cleanUp();
@@ -278,10 +297,11 @@ void createOutDir() {
 }
 
 // Open and print the meta data for JSON haplotype output
-FILE *setupJsonOutput(char *filename, FILE **outs) {
+FILE *setupJsonOutput(const char *jsonOutName, char *filename, FILE **outs,
+		      bool noOtherJson) {
   FILE *out = NULL;
 
-  sprintf(filename, "%s/parent_phase.json", CmdLineOpts::outPrefix);
+  sprintf(filename, "%s/%s", CmdLineOpts::outPrefix, jsonOutName);
   bool okToWrite = checkIfFileExists(filename, CmdLineOpts::forceWrite);
   if (okToWrite) {
     out = fopen(filename, "w");
@@ -294,17 +314,21 @@ FILE *setupJsonOutput(char *filename, FILE **outs) {
   }
 
   if (!out) {
-    bool nonJsonOutput = CmdLineOpts::txtOutput || CmdLineOpts::pedOutput ||
-			 CmdLineOpts::vcfOutput || CmdLineOpts::ivOutput ||
-			 CmdLineOpts::detectCO;
-    if (!nonJsonOutput) {
-      // No output possible: exit
-      for(int o = 0; o < 2; o++) {
-	FILE *out = outs[o];
-	fprintf(out, "Unable to write any output: will not phase\n");
+    if (noOtherJson) {
+      bool nonJsonOutput = CmdLineOpts::txtOutput || CmdLineOpts::pedOutput ||
+			   CmdLineOpts::vcfOutput || CmdLineOpts::ivOutput ||
+			   CmdLineOpts::detectCO;
+      if (!nonJsonOutput) {
+	// No output possible: exit
+	for(int o = 0; o < 2; o++) {
+	  FILE *out = outs[o];
+	  fprintf(out, "Unable to write any output: will not phase\n");
+	}
+	exit(5);
       }
-      exit(5);
     }
+    else
+      return NULL;
   }
   else {
     // Marker ids:

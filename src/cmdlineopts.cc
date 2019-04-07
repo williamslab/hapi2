@@ -22,6 +22,7 @@ char *CmdLineOpts::outPrefix = NULL;
 int   CmdLineOpts::txtOutput = 0;
 int   CmdLineOpts::pedOutput = 0;
 int   CmdLineOpts::vcfOutput = 0;
+int   CmdLineOpts::jsonOutput = 0;
 int   CmdLineOpts::jsonParOutput = 0;
 int   CmdLineOpts::ivOutput = 0;
 int   CmdLineOpts::useImpute2Format = 0;
@@ -66,6 +67,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"txt", no_argument, &CmdLineOpts::txtOutput, 1},
     {"ped", no_argument, &CmdLineOpts::pedOutput, 1},
     {"vcf", no_argument, &CmdLineOpts::vcfOutput, 1},
+    {"json", no_argument, &CmdLineOpts::jsonOutput, 1},
     {"json_par", no_argument, &CmdLineOpts::jsonParOutput, 1},
     {"iv", no_argument, &CmdLineOpts::ivOutput, 1},
     {"detect_co", required_argument, NULL, DETECT_CO},
@@ -326,9 +328,10 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     haveGoodArgs = false;
   }
 
-  if (!(txtOutput || pedOutput || vcfOutput || jsonParOutput || ivOutput ||
-	detectCO)) { // NOTE: main.cc needs updates if this condition changes
-                     //       see the <nonJsonOutput> variable
+  if (!(txtOutput || pedOutput || vcfOutput || jsonOutput || jsonParOutput ||
+	ivOutput || detectCO)) {
+		    // NOTE: main.cc needs updates if this condition changes
+                    //       see the <nonJsonOutput> variable
     fprintf(stderr, "ERROR: must choose at least one type of results to print\n");
     haveGoodArgs = false;
   }
@@ -374,7 +377,7 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "  --vcf\t\t\tVCF format haplotypes\n");
   fprintf(out, "  --ped\t\t\tPLINK ped format haplotypes\n");
   fprintf(out, "  --txt\t\t\tText format haplotypes\n");
-  fprintf(out, "  --json_par\t\tJSON format parent haplotypes\n");
+  fprintf(out, "  --json, --json_par\tJSON format haplotypes or parent haplotypes\n");
   fprintf(out, "\n");
   fprintf(out, "  --iv\t\t\tInheritance vector data in CSV format\n");
   fprintf(out, "  --detect_co <#>\tDetect crossover events\n");
