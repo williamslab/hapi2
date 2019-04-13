@@ -632,7 +632,7 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
   // Have full transmission information except for children with missing data:
   newState.unassigned = childrenData[ G_MISS ];
   newState.hetParent = 2; // both parents heterozygous
-  // Won't assign <homParentGeno> as it's meaningless when both parents are het
+  newState.homParentGeno = G_MISS;
   // Won't assign <parentPhase> field as all partial states have a value of
   // 0 here and it's never used
   //newState.parentPhase = 0;
@@ -2195,6 +2195,7 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
   uint8_t numRecombs; // TODO: optimization: do we want this?
   int lastAssignedMarker = chrLastMarker + 1; // technically not assigned yet
   uint64_t lastAssignedIV = 0, lastIVFlip = 0;
+  uint64_t lastIVparDiff = 0;
   bool lastIVSet = false;
   for(int hmmIndex = lastIndex; hmmIndex >= 0; hmmIndex--) {
     int curHmmIndex = hmmIndex; // not redundant: errors modify hmmIndex
@@ -2346,11 +2347,17 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 		     curState->parentPhase, numRecombs, curAmbigParHet,
 		     curAmbigParPhase, curArbitraryPar);
 
+    //////////////////////////////////////////////////////////////////////////
+    // For all markers between the next informative one and the current one,
+    // assign (1) which parent haplotypes were _un_transmitted, and
+    // (2) for any ambiguous sites, indicate whether they are necessarily
+    // homozygous:
+
     // Determine which parent haplotypes were _un_transmitted. The first two
     // bits are parent 0's haplotype 0 and 1, and the second two bits are
     // parent 1's haplotype 0 and 1. If the corresponding bit is set to 1, the
     // haplotype was _not_ transmitted
-    uint64_t untrans = 0;
+    uint64_t untrans;
     // TODO: need the flanking informative markers for each parent do this right
     // We use the IV values at the flanking informative markers to determine
     // this. <ivFlippable> values are uncertain and so those values will not
@@ -2361,6 +2368,10 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
       // if we have a meaningful IV for the subsequent marker, indicate that the
       // IV values are uncertain for any IV values that are flipped between them
       uncertainIV |= curState->iv ^ lastAssignedIV;
+
+    uint64_t curIVparDiff = (curState->iv & _parBits[0]) ^
+					    ((curState->iv & _parBits[1]) >> 1);
+
     // make the transmitted haplotype assignments for all markers between the
     // current marker and the subsequent informative marker
     int curMarker = _hmmMarker[curHmmIndex];
@@ -2372,6 +2383,8 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
     for(int m = startIndex; m < lastAssignedMarker; m++) {
       if (m == curMarker)
 	continue; // Don't set untrans for the current marker (is PHASE_OK)
+
+      untrans = 0;
 
       const PhaseVals &phase = theFam->getPhase(m);
       assert(phase.status != PHASE_OK);
@@ -2390,20 +2403,43 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 	// we can use <missing> -- <missing> is only set to 1 in the 0th bit for
 	// each child.
 	uint64_t shiftedIV = curState->iv >> p;
-	uncertainIV >>= p; // mirror the above shift in all <IV> values
+	// mirror the above shift in all <IV> values
+	uint64_t parUncertainIV = uncertainIV >> p;
 	// (shiftedIV & _parBits[0]) == 0, the first haplotype was
 	// transmitted. To detect when it was _un_transmitted, we use
 	// ~shiftedIV and check when that value is 0
-	if ((~shiftedIV & _parBits[0] & ~(uncertainIV | missing)) == 0)
+	if ((~shiftedIV & _parBits[0] & ~(parUncertainIV | missing)) == 0)
 	  // first haplotype for this parent untransmitted:
 	  untrans |= 1 << (2 * p); // use 1 for first haplotype
 	// (shiftedIV & _parBits[0]) == 0 implies the second haplotype was
 	// untransmitted, so:
-	if ((shiftedIV & _parBits[0] & ~(uncertainIV | missing)) == 0)
+	if ((shiftedIV & _parBits[0] & ~(parUncertainIV | missing)) == 0)
 	  untrans |= 2 << (2 * p); // use 2 for second haplotype
       }
 
-      theFam->setUntransPar(m, untrans);
+      // Below, wish only to consider the IV values where the children are
+      // non-missing and where their IV value is certain.
+      // Because the <curIVparDiff> value is only defined for the _parBits[0]
+      // values, here we OR in both uncertainIV and (uncertainIV >> 1),
+      // capturing both parent IV values. Since this is a mask, the _parBits[1]
+      // values don't change the result below.
+      uint64_t ivToInclude = ~(uncertainIV | missing | (uncertainIV >> 1));
+
+      // At PHASE_AMBIG sites, for many IV values, we can infer that the parents
+      // are in fact homozygous (for opposite alleles). The IV values where this
+      // is not the case are those where both parent transmitted the same
+      // pattern (or the exact opposite pattern).
+      // This is related to isIVambigPar().
+      // Are we uncertain about homozygous status?
+      bool curUncertainHomozyAtAmbig = (curIVparDiff & ivToInclude) == 0 ||
+			    ( (curIVparDiff ^ _parBits[0]) & ivToInclude ) == 0;
+      bool lastUncertainHomozyAtAmbig = (lastIVparDiff & ivToInclude) == 0 ||
+			    ( (lastIVparDiff ^ _parBits[0]) & ivToInclude ) ==0;
+      // Must both be homozygous if we are _not_ uncertain for cur and last:
+      bool bothParHomozyAtAmbig = 1 -
+		      (curUncertainHomozyAtAmbig | lastUncertainHomozyAtAmbig);
+
+      theFam->setUntransPar(m, untrans, bothParHomozyAtAmbig);
     }
 
     // To detect untrans, we exclude samples that recombine between informative
@@ -2428,6 +2464,7 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
     lastAssignedIV = (curState->iv & ~propagateMask) |
 					       (lastAssignedIV & propagateMask);
     lastIVFlip = ivFlippable;
+    lastIVparDiff = curIVparDiff;
 
 
     deleteStates(_hmm[curHmmIndex]);
