@@ -60,14 +60,19 @@ struct State;
 // same values since we use sets to store the objects.
 struct BT_ambig_info {
   BT_ambig_info() { }
-  BT_ambig_info(uint32_t s, uint64_t i, uint64_t a) {
+  BT_ambig_info(uint32_t s, uint64_t i, uint64_t a, uint8_t pp,
+		uint8_t app) {
     stateIdx = s;
     iv = i;
     ambig = a;
+    parPhase = pp;
+    ambigParPhase = app;
   }
   uint32_t stateIdx;
   uint64_t iv;
   uint64_t ambig;
+  uint8_t parPhase;
+  uint8_t ambigParPhase;
 };
 
 
@@ -83,9 +88,10 @@ class Phaser {
       _curBTAmbigSet = new BT_state_set();
       _prevBTAmbigSet = new BT_state_set();
       // TODO: would using pointers make this faster?
-      // Note that this value is impossible as <State::iv> will always have
-      // pairs of bits set instead of just 1 as here:
-      BT_ambig_info empty(UINT32_MAX, UINT64_MAX, 1);
+      // Note that this value is impossible as <State::ambig> will always have
+      // pairs of bits set (or, for ambig1, the first order bit set in any pair)
+      // instead of just the second bit as here:
+      BT_ambig_info empty(UINT32_MAX, UINT64_MAX, 2, 1, 1);
       _curBTAmbigSet->set_empty_key(empty);
       _prevBTAmbigSet->set_empty_key(empty);
 
@@ -124,7 +130,7 @@ class Phaser {
 				    uint8_t parentData,
 				    const uint64_t childrenData[5]);
     static void makeFullStates(const dynarray<State> &partialStates, int marker,
-			       const uint64_t childrenData[5],
+			       int firstMarker, const uint64_t childrenData[5],
 			       uint8_t missingPar, int numChildren,
 			       int numMissChildren);
     static uint8_t isIVambigPar(const State *state, uint8_t missingPar);
@@ -175,7 +181,23 @@ class Phaser {
     static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
 					      uint8_t &hetParIsDiff);
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
-			       const uint64_t unassigned);
+			       const uint64_t unassigned,
+			       int &lowOrderChildBit);
+    static int lowOrderUnambigUnassignedBit(const uint64_t allAmbig,
+					    const uint64_t unassigned,
+					    uint64_t &unambig,
+					    uint64_t &ambigStd);
+    static bool checkMinRecomb(uint64_t fullIV, uint64_t fullUnassigned,
+			       uint64_t ambig1Unassigned, State *theState,
+			       const State *prevState, uint8_t hetParent,
+			       uint8_t homParentGeno, uint8_t curParPhase,
+			       uint8_t altPhaseType, uint8_t ambigLocal,
+			       int64_t prevIndex, uint8_t IVambigPar,
+			       uint16_t minMaxRec[2],
+			       int16_t numMarkersSinceNonHetPar,
+			       int16_t numMarkersSinceOneHetPar,
+			       int totalRecombs, float totalLikehood,
+			       size_t numRecombs[2], int lowOrderChildBit);
     static void updateAmbigPrev(State *theState, int64_t prevIndex,
 				bool newBestPrev);
     static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
@@ -188,12 +210,15 @@ class Phaser {
     static void propagateBackIV(uint64_t curIV, uint64_t curAmbig,
 				State *prevState, uint64_t &newPrevIV,
 				uint64_t &newPrevAmbig,
-				uint8_t	&numAmbig1Recombs);
+				uint8_t &newPrevParPhase,
+				uint8_t &newPrevAmbigParPhase,
+				uint8_t &numAmbig1Recombs);
     static void collectAmbigPrevIdxs(uint64_t curIV, uint64_t curAmbig,
 				     uint8_t ambigPrev, uint32_t prevState,
 				     const dynarray<State*> &prevStates,
 				     BT_ambig_info &thePrevInfo,
 				     uint8_t &numAmbig1Recombs);
+    static void tracePrior(int hmmIndex, int stateIdx);
 
 
     //////////////////////////////////////////////////////////////////
@@ -248,13 +273,16 @@ class Phaser {
 	       // during back tracing, most ambig bits will be 0 so won't
 	       // really distinguish them, so we won't hash but use the raw
 	       // value:
-	       key.ambig;
+	       key.ambig +
+	       std::tr1::hash<uint8_t>{}( (key.ambigParPhase << 2) |
+								  key.parPhase);
       }
     };
     struct eqBTinfo {
       bool operator()(const BT_ambig_info k1, const BT_ambig_info k2) const {
 	return k1.stateIdx == k2.stateIdx && k1.iv == k2.iv &&
-	       k1.ambig == k2.ambig;
+	       k1.ambig == k2.ambig && k1.parPhase == k2.parPhase &&
+	       k1.ambigParPhase == k2.ambigParPhase;
       }
     };
     typedef typename google::dense_hash_set<BT_ambig_info,
