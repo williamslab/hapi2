@@ -2574,24 +2574,22 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
       // do this work of determining the <untrans> value to enable imputation
       // of the parent's genotype, but we can't impute based on children whose
       // data is missing.
-      uint64_t missing = phase.ambigMiss;
+      // Missing status in the 0th bit per child
+      uint64_t thisMarkMiss = phase.ambigMiss & _parBits[0];
 
       for(int p = 0; p < 2; p++) {
-	// shift the <IV> values for either parent into the 0'th bit so that
-	// we can use <missing> -- <missing> is only set to 1 in the 0th bit for
-	// each child.
-	uint64_t shiftedIV = curState->iv >> p;
-	// mirror the above shift in all <IV> values
-	uint64_t parUncertainIV = uncertainIV >> p;
-	// (shiftedIV & _parBits[0]) == 0, the first haplotype was
+	// align the missing bit with the relevant <curState->iv> and
+	// <uncertainIV> values
+	uint64_t shiftedMiss = thisMarkMiss << p;
+	// (curState->iv & _parBits[p]) == 0, the first haplotype was
 	// transmitted. To detect when it was _un_transmitted, we use
-	// ~shiftedIV and check when that value is 0
-	if ((~shiftedIV & _parBits[0] & ~(parUncertainIV | missing)) == 0)
+	// ~curState->iv and check when that value is 0
+	if ((~curState->iv & _parBits[p] & ~(uncertainIV | shiftedMiss)) == 0)
 	  // first haplotype for this parent untransmitted:
 	  untrans |= 1 << (2 * p); // use 1 for first haplotype
-	// (shiftedIV & _parBits[0]) == 0 implies the second haplotype was
+	// (curState->iv & _parBits[p]) == 0 implies the second haplotype was
 	// untransmitted, so:
-	if ((shiftedIV & _parBits[0] & ~(parUncertainIV | missing)) == 0)
+	if ((curState->iv & _parBits[p] & ~(uncertainIV | shiftedMiss)) == 0)
 	  untrans |= 2 << (2 * p); // use 2 for second haplotype
       }
 
@@ -2601,7 +2599,7 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
       // values, here we OR in both uncertainIV and (uncertainIV >> 1),
       // capturing both parent IV values. Since this is a mask, the _parBits[1]
       // values don't change the result below.
-      uint64_t ivToInclude = ~(uncertainIV | missing | (uncertainIV >> 1));
+      uint64_t ivToInclude = ~(uncertainIV | thisMarkMiss | (uncertainIV >> 1));
 
       // At PHASE_AMBIG sites, for many IV values, we can infer that the parents
       // are in fact homozygous (for opposite alleles). The IV values where this
@@ -2639,8 +2637,12 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
     uint8_t oneParHomozy = 1 - (hetParent >> 1);
     uint64_t propagateMask = (missing * 3) |
 					  (oneParHomozy * _parBits[hetParent]);
-    lastAssignedIV = (curState->iv & ~propagateMask) |
+    if (lastIVSet)
+      lastAssignedIV = (curState->iv & ~propagateMask) |
 					       (lastAssignedIV & propagateMask);
+    else
+      lastAssignedIV = curState->iv;
+    lastIVSet = true;
     lastIVFlip = ivFlippable;
     lastIVparDiff = curIVparDiff;
 
