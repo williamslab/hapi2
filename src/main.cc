@@ -200,7 +200,7 @@ int main(int argc, char **argv) {
       }
 
       if (CmdLineOpts::verbose) {
-	fprintf(log, "  Chromsome %s:\n", Marker::getChromName(chrIdx));
+	fprintf(log, "  Chromosome %s:\n", Marker::getChromName(chrIdx));
       }
 
       Phaser::run(theFam, chrIdx, log);
