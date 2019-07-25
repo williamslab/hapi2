@@ -1035,7 +1035,11 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
   // want to analyze parent 2 if bit 1 in missingPar is 1; otherwise shouldn't
   // iterate to 1 (result of this is either 1 or 2):
   int limitP = (missingPar >> 1) + 1;
-  for(int p = firstP; !haveAllButOne && p < limitP; p++) {
+  for(int p = firstP; !isPI && !haveAllButOne && p < limitP; p++) {
+    if (curPartial.hetParent == p)
+      // parent is heterozygous in this state: no need to check
+      continue;
+
     uint64_t allButOneIV = 0;
 
     // The inheritance vector with all but one haplotype being the same:
@@ -2330,7 +2334,7 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 
   // For when both parents are missing data:
   // Are we in a run of arbitrary/ambiguous parent assignments that begins at
-  // the end of the chromosome. Due to ambiguous recombinations, it is possible
+  // the end of the chromosome? Due to ambiguous recombinations, it is possible
   // for the states to be such that the parent assignments are completely
   // ambiguous. When this happens, we can select one of the parent assignments
   // at the end of the chromosome and trace back until the point where the
