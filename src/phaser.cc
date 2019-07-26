@@ -675,10 +675,14 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       uint8_t isPI = newState->hetParent >> 1;
       // PI states are informative for both parents (both are heteterozygous),
       // so there are 0 informative markers since seeing the non-het parent if
-      // <newState> is PI.
-      // If it is not PI, then there's been 1 state (the newly created one):
+      // <newState> is PI: (1 - isPI) below.
+      // If the state is not PI, AND if the homozygous parent
+      // (1 - newState->hetParent) is missing, we count the number of markers
+      // since the beginning of the chromosome:
+      bool homParMissing =
+		  (1 - isPI) && ((1 << (1 - newState->hetParent)) & missingPar);
       newState->numMarkersSinceNonHetPar =
-					(1 - isPI) * (marker - firstMarker + 1);
+			(1 - isPI) * homParMissing * (marker - firstMarker + 1);
       // PI states are heterozygous for both parents, so count is 1 when <isPI>
       // and zero otherwise (is a one het par marker in that case)
       newState->numMarkersSinceOneHetPar = isPI;
@@ -2376,6 +2380,15 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 
   }
 
+  // Should we assign the phase with status reflecting the potential for one
+  // haplotype transmission only? This is used to liberally make such
+  // assignments at the beginning and end of a chromosome where the IV is
+  // potentially consistent with one hap trans
+  bool assignOneHapTrans = false;
+  uint8_t oneHapTransHetParent;
+  uint8_t oneHapTransHap;
+  uint64_t oneHapTransOutlierIV;
+
   // Number of recombinations in <curState> relative to <prevState> below
   uint8_t numRecombs; // TODO: optimization: do we want this?
   int lastAssignedMarker = chrLastMarker + 1; // technically not assigned yet
@@ -2393,6 +2406,86 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
     // states that are in <_curIdxSet>. The true IV value is ambiguous in that
     // case.
     uint64_t ivFlippable = 0;
+
+    if (!assignOneHapTrans &&
+	_hmm[curHmmIndex][curStateIdx]->numMarkersSinceNonHetPar > 0 &&
+	(curHmmIndex == lastIndex || // always assign one hap trans at end ...
+	 // ... and beginning of a chromosome
+	 _hmm[curHmmIndex][curStateIdx]->numMarkersSinceNonHetPar ==
+				_hmmMarker[curHmmIndex] - chrFirstMarker + 1)) {
+      uint8_t hetParent = _hmm[curHmmIndex][curStateIdx]->hetParent;
+
+      // detect which haplotype was transmitted:
+      uint8_t homParent = 1 - hetParent;
+      uint64_t parHap =_hmm[curHmmIndex][curStateIdx]->iv & _parBits[homParent];
+      uint64_t oppParHap = parHap ^ _parBits[homParent];
+
+      if ((parHap & (parHap - 1)) == 0) { // test for 1 bit set
+	assignOneHapTrans = true;
+	oneHapTransHetParent = hetParent;
+	oneHapTransOutlierIV = parHap;
+	// transmitted haplotype is 0
+	oneHapTransHap = 0;
+      }
+      else if ((oppParHap & (oppParHap - 1)) == 0) { // test for all but 1 set
+	assignOneHapTrans = true;
+	oneHapTransHetParent = hetParent;
+	oneHapTransOutlierIV = oppParHap;
+	// transmitted haplotype is 1
+	oneHapTransHap = 1;
+      }
+      else {
+	// Note: because the IVs are unassigned initially, it's not possible
+	// to check for the one hap trans pattern at the initial markers.
+	// Therefore, the <State::numMarkersSinceNonHetPar> value will be
+	// non-zero for missing data parents that are homozygous and haven't yet
+	// had their IVs assigned
+	assert(_hmmMarker[curHmmIndex] - chrFirstMarker <=
+					    CmdLineOpts::oneHapTransThreshold);
+      }
+    }
+
+    if (assignOneHapTrans) {
+      uint8_t hetParent = _hmm[curHmmIndex][curStateIdx]->hetParent;
+
+      // has it ended?
+      if (_hmm[curHmmIndex][curStateIdx]->numMarkersSinceNonHetPar <= 0 ||
+	  oneHapTransHetParent != hetParent)
+	assignOneHapTrans = false;
+      else {
+	// can do this by (1) setting <ivFlippable> for the child that has the
+	// outlier haplotype ...
+	ivFlippable |= oneHapTransOutlierIV;
+
+	// ... (2) indicating the site may be heterozygous for both parents ...
+	curAmbigParHet |= 1 << 2;
+
+	// ... and (3) assigning the phase type for the both parent het case:
+	// the phase type for the both parent het determines which haplotype is
+	// set to be printed (other is set missing); we want this to be
+	// <transHap>.
+	// The homozygous genotype is either 0 or 3, and we'll divide by 3 to
+	// get a boolean:
+	uint8_t homGenoKind = _hmm[curHmmIndex][curStateIdx]->homParentGeno / 3;
+	// If the phase type is 0, when the genotype is heterozygous,
+	// haplotype 0 is allele 0, and haplotype 1 is allele 1. Whichever
+	// haplotype is the same as homGenoKind will be printed (non-missing).
+	// So, if <homGenoKind> == 0 and <transHap> == 0, we want the phase type
+	// to be the same as <transHap>. Same if <homGenoKind> == 0 and
+	// <transHap> == 1.
+	// The reverse is true when <homGenoKind> == 1. So it suffices to
+	// xor:
+	// Note: must shift the phase types for <homParent> and <hetParent> to
+	// their respective positions in the 2-bit <phaseType>.
+	uint8_t homParent = 1 - hetParent;
+	uint8_t phaseType = ((oneHapTransHap ^ homGenoKind) << homParent) |
+		    (_hmm[curHmmIndex][curStateIdx]->parentPhase << hetParent);
+	// (Note: shifting by 4 bits to get to the initial bit that stores the
+	// both parent het phase types)
+	curAmbigParPhase |= 1 << (4 + phaseType);
+
+      }
+    }
 
     uint8_t curHomParGeno = curState->homParentGeno;
     // above only valid for one parent het states:
