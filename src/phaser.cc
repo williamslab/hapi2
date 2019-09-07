@@ -1799,9 +1799,10 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 	equalStates = oldLocalLikehood == localLikehood;
       }
 
-      if (isPI && IVambigPar && theStateUpdated && equalStates) {
+      if (isPI && IVambigPar && equalStates) {
 	for(int upi = 0; upi < nUpenaltyIters; upi++)
-	  theState[upi]->arbitraryPar = 1;
+	  if (theStateUpdated[upi]) // TODO: right?
+	    theState[upi]->arbitraryPar = 1;
 	break;
       }
       curParPhase = altPhaseType;
