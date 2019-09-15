@@ -2489,8 +2489,10 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
     }
 
     uint8_t curHomParGeno = curState->homParentGeno;
-    // above only valid for one parent het states:
-    bool homParGenoAssigned = curState->hetParent < 2;
+    // above only valid for one parent het states or states with ambiguous
+    // parent heterozygosity
+    bool homParGenoAssigned = curState->hetParent < 2 ||
+						      (curAmbigParHet & 3) != 0;
     uint8_t ambigHomParGeno = 0;
 
     // Find all the possible parent phase types that are have equal and minimal
@@ -2525,7 +2527,8 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 	curArbitraryPar |= ambigState->arbitraryPar;
       }
 
-      if (ambigState->hetParent < 2) {
+      if (ambigState->hetParent < 2 || (ambigState->ambigParHet & 3) != 0) {
+	assert(ambigState->homParentGeno != G_MISS);
 	if (!homParGenoAssigned) {
 	  curHomParGeno = ambigState->homParentGeno;
 	  homParGenoAssigned = true;
@@ -2613,9 +2616,12 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
     uint64_t childrenData = _genos[curHmmIndex].second;
     uint64_t missing = (childrenData & _parBits[0]) &
 					  ~((childrenData & _parBits[1]) >> 1);
-    assert((homParGenoAssigned && curHomParGeno != G_MISS) ||
-	   (curState->hetParent == 2 &&
-	    ((curArbitraryPar & 3) == 0)));
+    // if <curHomParGeno> is non-missing iff <homParGenoAssigned>
+    assert((curHomParGeno != G_MISS) == homParGenoAssigned);
+    // either we have a homozygous parent genotype OR the site is PI with no
+    // ambiguity in parent heterozygosity
+    assert(curHomParGeno != G_MISS ||
+	   (curState->hetParent == 2 && (curAmbigParHet & 3) == 0));
     assert(!ambigHomParGeno);
     theFam->setPhase(_hmmMarker[curHmmIndex], curState->iv,
 		     curState->ambig & _parBits[1], missing, ivFlippable,
