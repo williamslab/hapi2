@@ -1801,7 +1801,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 
       if (isPI && IVambigPar && equalStates) {
 	for(int upi = 0; upi < nUpenaltyIters; upi++)
-	  if (theStateUpdated[upi]) // TODO: right?
+	  // TODO: below right? Or only want one theStateUpdated?
+	  if (theStateUpdated[upi])
 	    theState[upi]->arbitraryPar = 1;
 	break;
       }
@@ -1945,7 +1946,7 @@ bool Phaser::checkMinRecomb(uint64_t fullIV, uint64_t fullUnassigned,
 			    size_t numRecombs[2], int lowOrderChildBit) {
   // Does the current previous state lead to minimum recombinations for
   // <theState>? (Could be either a new minimum or an ambiguous one)
-  bool theStateUpdated;
+  bool theStateUpdated = false;
 
   // Is the path via <prevIndex> an error? It is if prevIndex is an error,
   // which would make the current state an error if it is used as the new
