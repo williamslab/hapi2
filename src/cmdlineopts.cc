@@ -40,6 +40,7 @@ int   CmdLineOpts::edgeCO = 0;
 int   CmdLineOpts::verbose = 0;
 int   CmdLineOpts::minNumParentsData = 0;
 int   CmdLineOpts::minNumChildrenData = 2;
+uint8_t CmdLineOpts::forceMissingPar = 0;
 
 // Parses the command line options for the program.
 bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
@@ -51,6 +52,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     EDGE_CO,
     MIN_PAR,
     MIN_CHILD,
+    MISS_PAR,
   };
 
   static struct option const longopts[] =
@@ -82,6 +84,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"verbose", no_argument, &CmdLineOpts::verbose, 1},
     {"min_par", required_argument, NULL, MIN_PAR},
     {"min_child", required_argument, NULL, MIN_CHILD},
+    {"set_miss_par", required_argument, NULL, MISS_PAR},
     {0, 0, 0, 0}
   };
 
@@ -263,6 +266,19 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	  haveGoodArgs = false;
 	}
 	break;
+      case MISS_PAR:
+	forceMissingPar = strtol(optarg, &endptr, 10);
+	if (errno != 0 || *endptr != '\0') {
+	  fprintf(stderr, "ERROR: unable to parse set_miss_par option as integer\n");
+	  if (errno != 0)
+	    perror("strtol");
+	  exit(2);
+	}
+	if (forceMissingPar < 0 || forceMissingPar > 3) {
+	  fprintf(stderr, "ERROR: set_miss_par option must be between 0 and 3\n");
+	  haveGoodArgs = false;
+	}
+	break;
 
 
       case '?':
@@ -392,8 +408,13 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "\n");
   fprintf(out, "OPTIONS:\n");
   fprintf(out, "  -c, --chr <string>\tOnly analyze specified chromosome\n");
-  fprintf(out, "  --start <#>\t\tstart position on given chromosome\n");
-  fprintf(out, "  --end <#>\t\tend position on given chromosome\n");
+  fprintf(out, "  --start <#>\t\tStart position on given chromosome\n");
+  fprintf(out, "  --end <#>\t\tEnd position on given chromosome\n");
+//  fprintf(out, "\n");
+  fprintf(out, "  --min_par <#>\t\tOnly analyze families with at least this many parents\n");
+//  fprintf(out, "\t\t\tDefault: 0.\n");
+  fprintf(out, "  --min_child <#>\tOnly analyze families with at least this many children\n");
+//  fprintf(out, "\t\t\tDefault: 2.\n");
   fprintf(out, "\n");
   fprintf(out, "  --no_err_max <#>\tMaximum number of recombinations attributable to a\n");
   fprintf(out, "\t\t\tsingle marker before it is called an error. Default: %d.\n",
@@ -412,5 +433,5 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "  --no_family_id\tIgnore family ids from PLINK .fam file\n");
   fprintf(out, "\n");
   fprintf(out, "  --verbose\t\tPrint verbose messsages to log during phasing\n");
-  fprintf(out, "\n");
+//  fprintf(out, "\n");
 }

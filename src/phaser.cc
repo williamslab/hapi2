@@ -56,12 +56,15 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
   _ambigPrevLists.clear();
   parBitsInit(numChildren);
 
-  // bit vector with bit 0: dad, bit 1: mom
+  // which parnets are missing? Bit vector with bit 0: dad, bit 1: mom
   uint8_t missingPar = 0;
   if (!theFam->_parents->first->hasData())
     missingPar += 1;
   if (!theFam->_parents->second->hasData())
     missingPar += 2;
+
+  // force parents to be missing according to command-line options:
+  missingPar |= CmdLineOpts::forceMissingPar;
 
   dynarray<State> partialStates;
   _lastInformMarker = -1;
@@ -78,8 +81,8 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 0: get the data for this marker
-    getFamilyData(theFam, _curMarker, parentData, parentGenoTypes, childrenData,
-		  childGenoTypes, numMissChildren);
+    getFamilyData(theFam, missingPar, _curMarker, parentData, parentGenoTypes,
+		  childrenData, childGenoTypes, numMissChildren);
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 1: Determine marker type and check for Mendelian errors
@@ -183,16 +186,19 @@ void Phaser::parBitsInit(int numChildren) {
 // Looks up and stores the genotype values for the parents and children
 // For speedy marker type detection, uses bit representation in <*GenoTypes>
 // variables to indicate which genotypes the parents and children have.
-void Phaser::getFamilyData(NuclearFamily *theFam, int marker,
-			   uint8_t &parentData, uint8_t &parentGenoTypes,
+void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t missingPar,
+			   int marker, uint8_t &parentData,
+			   uint8_t &parentGenoTypes,
 			   uint64_t childrenData[5], uint8_t &childGenoTypes,
 			   int &numMissChildren) {
   NuclearFamily::par_pair parents = theFam->_parents;
   dynarray<PersonBulk*> &children = theFam->_children;
 
   // Get data for dad (first 2 bits) and mom (bits 3-4)
-  uint8_t dadData = parents->first->getBitGeno(marker);
-  uint8_t momData = parents->second->getBitGeno(marker);
+  uint8_t dadData = (missingPar & 1) ? G_MISS :
+				       parents->first->getBitGeno(marker);
+  uint8_t momData = (missingPar & 2) ? G_MISS :
+				       parents->second->getBitGeno(marker);
   parentData = dadData + (momData << 2);
 
   // Which of the genotypes are present in the parents/children? There are

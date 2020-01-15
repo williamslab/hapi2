@@ -7,8 +7,8 @@
 #ifndef CMDLINEOPTS_H
 #define CMDLINEOPTS_H
 
-#define VERSION_NUMBER	"1.89.2"
-#define RELEASE_DATE    "30 Sep 2019"
+#define VERSION_NUMBER	"1.89.3"
+#define RELEASE_DATE    "15 Jan 2020"
 
 class CmdLineOpts {
   public:
@@ -110,6 +110,13 @@ class CmdLineOpts {
     // How many children in a nuclear family must have data in order to phase
     // the family
     static int minNumChildrenData;
+
+    // Bit mask for forcing missing data on parents. Values:
+    // 0: (default) no forced missingness
+    // 1: dad missing
+    // 2: mom missing
+    // 3: both dad and mom missing
+    static uint8_t forceMissingPar;
 };
 
 #endif // CMDOPTIONS_H

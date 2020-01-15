@@ -112,8 +112,9 @@ class Phaser {
     //////////////////////////////////////////////////////////////////
 
     static void parBitsInit(int numChildren);
-    static void getFamilyData(NuclearFamily *theFam, int marker,
-			      uint8_t &parentData, uint8_t &parentGenoTypes,
+    static void getFamilyData(NuclearFamily *theFam, uint8_t missingPar,
+			      int marker, uint8_t &parentData,
+			      uint8_t &parentGenoTypes,
 			      uint64_t childrenData[5], uint8_t &childGenoTypes,
 			      int &numMissChildren);
     static int  getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
