@@ -144,7 +144,8 @@ class Phaser {
 			     uint8_t isPI, uint8_t missingPar,
 			     int numMarkersSincePrev, uint64_t &penalty,
 			     int16_t &numMarkersSinceNonHetPar,
-			     int16_t &numMarkersSinceOneHetPar);
+			     int16_t &numMarkersSinceOneHetPar,
+			     const uint64_t childrenData[5]);
     static void handlePI(const State *prevState, uint64_t &fullIV,
 			 uint64_t &fullAmbig, uint64_t &recombs,
 			 uint64_t parRecombs[2], uint64_t &propagateAmbig,

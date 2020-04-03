@@ -876,7 +876,8 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
   int16_t numMarkersSinceOneHetPar = 0;
   if (missingPar > 0) {
     checkPenalty(prevState, curPartial, isPI, missingPar, numMarkersSincePrev,
-		 penalty, numMarkersSinceNonHetPar, numMarkersSinceOneHetPar);
+		 penalty, numMarkersSinceNonHetPar, numMarkersSinceOneHetPar,
+		 childrenData);
   }
 
   // (3) if curPartial is partly informative, for heterozygous children:
@@ -1037,19 +1038,17 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
 			  uint8_t isPI, uint8_t missingPar,
 			  int numMarkersSincePrev, uint64_t &penalty,
 			  int16_t &numMarkersSinceNonHetPar,
-			  int16_t &numMarkersSinceOneHetPar) {
-  bool haveAllButOne = false; // all but one haplotype?
+			  int16_t &numMarkersSinceOneHetPar,
+			  const uint64_t childrenData[5]) {
+  // minimum count of number of parent haplotypes transmitted: 0 or 1
+  int minHapTrans = 0;
   // want to analyze parent 0 if bit 0 in missingPar is 1; otherwise start from
   // parent 1 (result of this is either 0 or 1):
   int firstP = 1 - (missingPar & 1);
   // want to analyze parent 2 if bit 1 in missingPar is 1; otherwise shouldn't
   // iterate to 1 (result of this is either 1 or 2):
   int limitP = (missingPar >> 1) + 1;
-  for(int p = firstP; !isPI && !haveAllButOne && p < limitP; p++) {
-    if (curPartial.hetParent == p)
-      // parent is heterozygous in this state: no need to check
-      continue;
-
+  for(int p = firstP; p < limitP; p++) {
     uint64_t allButOneIV = 0;
 
     // The inheritance vector with all but one haplotype being the same:
@@ -1061,79 +1060,130 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
       // If all assigned bits are 0 or 1:
       if (assignedParHap == 0 ||
 	  assignedParHap == (_parBits[p] & ~prevState->unassigned)) {
-	haveAllButOne = true;
+	minHapTrans = 1; // in fact, this is all children receiving same
 	allButOneIV = prevState->unassigned & _parBits[p];
       }
     }
     else {   // All bits assigned for <p>
-      // Only a single bit set in parHap or oppParHap?
-      // This corresponds to either all but one of the children or all children
-      // except one receiving the same haplotype.
-      if (parHap && !(parHap & (parHap - 1))) {
-	assert(!haveAllButOne); // if violated, we need to track two penalties
-	haveAllButOne = true;
-	allButOneIV = parHap;
-      }
-      else if (oppParHap && !(oppParHap & (oppParHap - 1))) {
-	assert(!haveAllButOne); // if violated, we need to track two penalties
-	haveAllButOne = true;
-	allButOneIV = oppParHap;
+      // Only 1 or 2 bits set in parHap or oppParHap?
+      // * Only 1 corresponds to either all but one of the children or all
+      //   children except one receiving the same haplotype.
+      // * Also check for 2 since in some cases, two children could
+      //   recombine near each other and produce a oneHapTrans scenario
+      // Note that the real indicator that oneTransHap has happened is the
+      // long string of markers where the relevant parent is not heterozygous,
+      // so being somewhat liberal here is not likely to go wrong.
+      uint64_t parHaps[2] = { parHap, oppParHap };
+      uint64_t numTrans[2] = { popcount(parHap), popcount(oppParHap) };
+      // which pattern (parHap or oppParHap) has min number of 1s (popcount)?
+      int minPat = (numTrans[0] <= numTrans[1]) ? 0 : 1;
+
+      if (numTrans[minPat] > 0 && numTrans[minPat] <= 2) {
+	// TODO: for 2 children, want <= 1 not <= 2
+	assert(minHapTrans == 0); // if violated, we need to track two penalties
+	minHapTrans = numTrans[minPat];
+	allButOneIV = parHaps[minPat];
       }
     }
 
-    if (!haveAllButOne)
-      // want numMarkersSinceNonhetPar == 0 (which it is in the caller) if this
-      // is true for both parents
+    if (!minHapTrans)
+      // if this is the case for both parents, want
+      // <numMarkersSinceNonHetPar> == 0 (which it is in the caller)
       continue;
 
+    // should we accumulate markers in <numMarkersSinceNonHetPar>?
+    bool accumNumSinceNonHet = curPartial.hetParent < 2;
+    // Typically, if <curPartial.hetParent> == 2, numMarkersSinceNonHetPar
+    // should be 0. This is the value assigned in the caller.
+    // However, if there's a one hap trans IV *and* the child that received
+    // the outlier haplotype is missing, the marker is trivially ambiguous
+    // for which parent is heterozygous, and we should not reset
+    // <numMarkersSinceNonHetPar>
+    if (!accumNumSinceNonHet && (childrenData[G_MISS] & allButOneIV))
+      accumNumSinceNonHet = true;
+
+
     if (prevState->numMarkersSinceNonHetPar < 0) {
-      // have already applied the penalty previously; check whether the
-      // heterozygous parent matches the previous state
-      if (curPartial.hetParent == prevState->hetParent ||
-	  ((prevState->ambigParHet >> curPartial.hetParent) & 1) == 1) {
-	// same parent is heterozygous, possibly apply a second penalty
-	numMarkersSinceNonHetPar = prevState->numMarkersSinceNonHetPar -
-							    numMarkersSincePrev;
-	if (numMarkersSinceNonHetPar < -CmdLineOpts::oneHapTransThreshold &&
-	    prevState->numMarkersSinceNonHetPar >=
-					 -CmdLineOpts::oneHapTransThreshold) {
-	  // Has been 2x threshold distance: apply another penalty (which should
-	  // force a recombination)
-	  penalty = allButOneIV;
-	}
-      }
-      else {
-	// penalty was applied for a different heterozygous parent
-	if (curPartial.hetParent < 2 && (curPartial.hetParent & missingPar))
-	  // one parent is heterozygous, but different than the previous state;
-	  // reset the count:
-	  numMarkersSinceNonHetPar = numMarkersSincePrev;
-      }
-    }
-    else {
-      if (prevState->numMarkersSinceNonHetPar + numMarkersSincePrev >
-					    CmdLineOpts::oneHapTransThreshold) {
-	// above threshold => apply penalty:
+      // have already applied the penalty previously; have there been enough
+      // markers to apply a second penalty?
+      if (prevState->numMarkersSinceNonHetPar - numMarkersSincePrev <
+			    -CmdLineOpts::oneHapTransThreshold * minHapTrans &&
+	  prevState->numMarkersSinceNonHetPar >=
+			    -CmdLineOpts::oneHapTransThreshold * minHapTrans) {
+	// NOTE: applying this regardless of <accumNumSinceNonHet> because
+	//       those markers have already been encountered. We may still
+	//       reset <numMarkersSinceNonHetPar> for the state being formed,
+	//       but the penalty applies due to past markers
+	// Has been 2x threshold distance: apply another penalty (which should
+	// force a recombination)
 	penalty = allButOneIV;
       }
 
-      if (curPartial.hetParent < 2) {
+      // now decide what value of <numMarkersSinceNonHetPar> should be assigned
+      // to the newly created state:
+      if (accumNumSinceNonHet) {
 	if (curPartial.hetParent == prevState->hetParent ||
-	    ((prevState->ambigParHet >> curPartial.hetParent) & 1) == 1) {
+	    ((prevState->ambigParHet >> curPartial.hetParent) & 1) == 1 ||
+	    // Note: hetParent == 2 is a corner case: can only get here if
+	    // the child that inherited the outlier haplotype is missing data,
+	    // and we'll just act as if the site has the same heterozygous
+	    // status as the last site (see where <accumNumSinceNonHet> is
+	    // assigned above)
+	    curPartial.hetParent == 2) {
+	  // same parent is heterozygous: continue accumulating number of
+	  // markers
+	  numMarkersSinceNonHetPar = prevState->numMarkersSinceNonHetPar -
+							    numMarkersSincePrev;
+	}
+	else if (curPartial.hetParent & missingPar) {
+	  // one parent is heterozygous, but different than the previous state;
+	  // reset the count:
+	  // Note: this means that we count the states between the new one and
+	  // <prevState> for both parents. Seems appropriate: neither was
+	  // heterozygous over that interval
+	  numMarkersSinceNonHetPar = numMarkersSincePrev;
+	}
+      }
+      // else: numMarkersSinceNonHetPar == 0 (assigned in caller)
+    }
+    else {
+      if (prevState->numMarkersSinceNonHetPar + numMarkersSincePrev >
+			      CmdLineOpts::oneHapTransThreshold * minHapTrans) {
+	// above threshold => apply penalty:
+	// NOTE: applying this regardless of <accumNumSinceNonHet> because
+	//       those markers have already been encountered. We may still
+	//       reset <numMarkersSinceNonHetPar> for the state being formed,
+	//       but the penalty applies due to past markers
+	penalty = allButOneIV;
+      }
+
+      if (accumNumSinceNonHet) {
+	if (curPartial.hetParent == prevState->hetParent ||
+	    ((prevState->ambigParHet >> curPartial.hetParent) & 1) == 1 ||
+	    // Note: hetParent == 2 is a corner case: can only get here if
+	    // the child that inherited the outlier haplotype is missing data,
+	    // and we'll just act as if the site has the same heterozygous
+	    // status as the last site (see where <accumNumSinceNonHet> is
+	    // assigned above)
+	    curPartial.hetParent == 2) {
 	  if (penalty)
-	    // penalty applied: make count negative
-	    numMarkersSinceNonHetPar = -(prevState->numMarkersSinceNonHetPar +
-					 numMarkersSincePrev -
-					 CmdLineOpts::oneHapTransThreshold);
+	    // same parent is heterozygous and penalty applied: continue
+	    // accumulating number of markers and make count negative
+	    numMarkersSinceNonHetPar =
+	      -(prevState->numMarkersSinceNonHetPar + numMarkersSincePrev -
+			      CmdLineOpts::oneHapTransThreshold * minHapTrans);
 	  else
-	    // accumulate markers that we have encountered since the last
-	    // heterozygote:
+	    // same parent is heterozygous: continue accumulating number of
+	    // markers
 	    numMarkersSinceNonHetPar = prevState->numMarkersSinceNonHetPar +
 							    numMarkersSincePrev;
 	}
 	else if (curPartial.hetParent & missingPar) {
 	  // one parent is heterozygous, but different than the previous state;
 	  // reset the count:
+	  // Note: this means that we count the states between the new one and
+	  // <prevState> for both parents. Seems appropriate: neither was
+	  // heterozygous over that interval
 	  numMarkersSinceNonHetPar = numMarkersSincePrev;
 	}
       }
@@ -1474,7 +1524,6 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // parent are unassigned?
   uint64_t unassignedPenalty = 0;
   if (fullUnassigned && (penalty & fullUnassigned) == fullUnassigned) {
-    assert(penalty == fullUnassigned);
     unassignedPenalty = penalty;
     penalty = 0;
   }
@@ -1502,6 +1551,12 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 	// apply penalty
 	penaltyCount += THE_PENALTY;
     }
+  }
+
+  uint8_t ohpPenalty = 0;
+  if (numMarkersSinceOneHetPar > CmdLineOpts::bothParHetThreshold) {
+    ohpPenalty = 1;
+    numMarkersSinceOneHetPar = -1; // penalty will be applied below
   }
 
   // For maximum likelihood phasing, get the relevant (log) probabilities and
@@ -1721,11 +1776,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 	  // unassigned
 	  totalRecombs += THE_PENALTY;
 
-	if (numMarkersSinceOneHetPar > CmdLineOpts::bothParHetThreshold) {
-	  // apply penalty for children's IVs switching from one parent to other
-	  totalRecombs += 1;
-	  numMarkersSinceOneHetPar = -1; // penalty applied
-	}
+	// apply penalty for children's IVs switching from one parent to other
+	totalRecombs += ohpPenalty;
       }
       else
 	// TODO! this (currently non-functional) code doesn't account for the
@@ -2443,15 +2495,6 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 	oneHapTransOutlierIV = oppParHap;
 	// transmitted haplotype is 1
 	oneHapTransHap = 1;
-      }
-      else {
-	// Note: because the IVs are unassigned initially, it's not possible
-	// to check for the one hap trans pattern at the initial markers.
-	// Therefore, the <State::numMarkersSinceNonHetPar> value will be
-	// non-zero for missing data parents that are homozygous and haven't yet
-	// had their IVs assigned
-	assert(_hmmMarker[curHmmIndex] - chrFirstMarker <=
-					    CmdLineOpts::oneHapTransThreshold);
       }
     }
 
