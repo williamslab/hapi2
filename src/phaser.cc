@@ -677,7 +677,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
 	continue;
       State *newState = new State(partialStates[i]);
       newState->ambigPrev = 0;
-      newState->minRecomb = 0;
+      newState->minRecomb = 0.0f;
       uint8_t isPI = newState->hetParent >> 1;
       // PI states are informative for both parents (both are heteterozygous),
       // so there are 0 informative markers since seeing the non-het parent if
@@ -719,7 +719,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
   // Note that the maximum value may be stale and may not be present in any
   // state, but we track it as an optimization and avoid going through the
   // states when this value is too low to bother.
-  uint16_t minMaxRec[2] = { UINT16_MAX, 0 };
+  float minMaxRec[2] = { FLT_MAX, 0 };
 
   uint32_t numPrev = prevStates.length();
   int numPartial = partialStates.length();
@@ -813,7 +813,7 @@ uint8_t Phaser::isIVambigPar(const State *state, uint8_t missingPar) {
 // if by mapping a state from two markers back to the current state with a
 // penalty term there are overall fewer recombinations).
 void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
-			   const State &curPartial, uint16_t minMaxRec[2],
+			   const State &curPartial, float minMaxRec[2],
 			   const uint64_t childrenData[5], uint8_t IVambigPar,
 			   uint8_t missingPar, int numDataChildren,
 			   int numMarkersSincePrev) {
@@ -1455,7 +1455,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint64_t ambig1PrevInfo, uint8_t hetParent,
 			  uint8_t homParentGeno, uint8_t initParPhase,
 			  uint8_t altPhaseType, int64_t prevIndex,
-			  uint8_t IVambigPar, uint16_t minMaxRec[2],
+			  uint8_t IVambigPar, float minMaxRec[2],
 			  bool hetParentUndefined,
 			  const uint64_t childrenData[5], int numDataChildren,
 			  int16_t numMarkersSinceNonHetPar,
@@ -1704,13 +1704,13 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 	lastState = theState[upenaltyIter];
       }
 
-      int totalRecombs = 0;
+      float totalRecombs = 0;
       float totalLikehood = -FLT_MAX;
       if (_phaseMethod == PHASE_MINREC) {
 	totalRecombs = prevState->minRecomb + numRecombs[0];
 
 	if (prevIndex < 0) // apply penalty for error states
-	  totalRecombs += CmdLineOpts::max1MarkerRecomb;
+	  totalRecombs += CmdLineOpts::max1MarkerRecomb - 0.5f;
 
 	// apply any penalty for only one haplotype transmission
 	totalRecombs += penaltyCount;
@@ -1873,7 +1873,7 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t allAmbig,
     State *newState = new State;
     newState->ambig = allAmbig;
     newState->unassigned = unassigned;
-    newState->minRecomb = UINT16_MAX;
+    newState->minRecomb = FLT_MAX;
     newState->maxLikelihood = -FLT_MAX;
     iv_ambig newStateKey = new iv_ambig_real(lookupIV, allAmbig, unassigned);
     _stateHash[ newStateKey ] = newState;
@@ -1945,10 +1945,10 @@ bool Phaser::checkMinRecomb(uint64_t fullIV, uint64_t fullUnassigned,
 			    uint8_t homParentGeno, uint8_t curParPhase,
 			    uint8_t altPhaseType, uint8_t ambigLocal,
 			    int64_t prevIndex, uint8_t IVambigPar,
-			    uint16_t minMaxRec[2],
+			    float minMaxRec[2],
 			    int16_t numMarkersSinceNonHetPar,
 			    int16_t numMarkersSinceOneHetPar,
-			    int totalRecombs, float totalLikehood,
+			    float totalRecombs, float totalLikehood,
 			    size_t numRecombs[2], int lowOrderChildBit) {
   // Does the current previous state lead to minimum recombinations for
   // <theState>? (Could be either a new minimum or an ambiguous one)
@@ -2273,7 +2273,7 @@ void Phaser::updateAmbigPrev(State *theState, int64_t prevIndex,
 // interfere with decisions about states that are equivalent, so we clear the
 // flag when all are 2.
 void Phaser::rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
-				       uint16_t minMaxRec[2], int numChildren) {
+				       float minMaxRec[2], int numChildren) {
   bool allError2 = true; // assume all states have <error> == 2 initially
   int shiftToState = -1;
 
@@ -2778,14 +2778,14 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
 // that is minimal and stores any other states that are tied for minimum in
 // <_curIdxSet>.
 uint32_t Phaser::findMinStates(dynarray<State*> &theStates) {
-  uint16_t minLastMarker = UINT16_MAX;
+  float minLastMarker = FLT_MAX;
   // The state we will designate as the minimum even as there may ambiguity
   // stored in <_stateIdxSet>
   uint32_t minStateIdx = UINT32_MAX;
 
   int numStates = theStates.length();
   for(int i = 0; i < numStates; i++) {
-    uint16_t curRecomb = theStates[i]->minRecomb;
+    float curRecomb = theStates[i]->minRecomb;
     if (curRecomb < minLastMarker) {
       // new minimum: clear any that were equivalent to the previous minimum
       _curBTAmbigSet->clear();
@@ -3021,7 +3021,7 @@ void Phaser::tracePrior(int hmmIndex, int stateIdx) {
 
   do {
     State *state = _hmm[ hmmIndex ][ stateIdx ];
-    printf("iv = %ld, ambig = %ld, unassigned = %ld, minRecomb = %d, numSinceNonHet = %d\n",
+    printf("iv = %ld, ambig = %ld, unassigned = %ld, minRecomb = %.1f, numSinceNonHet = %d\n",
 	   state->iv, state->ambig, state->unassigned, state->minRecomb,
 	   state->numMarkersSinceNonHetPar);
     printf("  hmmIndex = %d, state = %d  (marker = %d)\n",
@@ -3071,7 +3071,7 @@ void Phaser::printStates(int hmmIndex) {
   for(int idx = 0; idx < numStates; idx++) {
     State *state = _hmm[ hmmIndex ][ idx ];
 
-    printf("iv = %ld, ambig = %ld, unassigned = %ld, minRecomb = %d, numSinceNonHet = %d\n",
+    printf("iv = %ld, ambig = %ld, unassigned = %ld, minRecomb = %.1f, numSinceNonHet = %d\n",
 	   state->iv, state->ambig, state->unassigned, state->minRecomb,
 	   state->numMarkersSinceNonHetPar);
     printf("  hmmIndex = %d, state = %d  (marker = %d)\n",

@@ -136,7 +136,7 @@ class Phaser {
 			       int numMissChildren);
     static uint8_t isIVambigPar(const State *state, uint8_t missingPar);
     static void mapPrevToFull(const State *prevState, int64_t prevIdx,
-			      const State &curPartial, uint16_t minMaxRec[2],
+			      const State &curPartial, float minMaxRec[2],
 			      const uint64_t childrenData[5],
 			      uint8_t IVambigPar, uint8_t missingPar,
 			      int numDataChildren, int numMarkersSincePrev);
@@ -174,7 +174,7 @@ class Phaser {
 			     uint64_t ambig1PrevInfo, uint8_t hetParent,
 			     uint8_t homParentGeno, uint8_t initParPhase,
 			     uint8_t altPhaseType, int64_t prevIndex,
-			     uint8_t IVambigPar, uint16_t minMaxRec[2],
+			     uint8_t IVambigPar, float minMaxRec[2],
 			     bool hetParentUndefined,
 			     const uint64_t childrenData[5],int numDataChildren,
 			     int16_t numMarkersSinceNonHetPar,
@@ -194,15 +194,15 @@ class Phaser {
 			       uint8_t homParentGeno, uint8_t curParPhase,
 			       uint8_t altPhaseType, uint8_t ambigLocal,
 			       int64_t prevIndex, uint8_t IVambigPar,
-			       uint16_t minMaxRec[2],
+			       float minMaxRec[2],
 			       int16_t numMarkersSinceNonHetPar,
 			       int16_t numMarkersSinceOneHetPar,
-			       int totalRecombs, float totalLikehood,
+			       float totalRecombs, float totalLikehood,
 			       size_t numRecombs[2], int lowOrderChildBit);
     static void updateAmbigPrev(State *theState, int64_t prevIndex,
 				bool newBestPrev);
     static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
-					  uint16_t minMaxRec[2],
+					  float minMaxRec[2],
 					  int numChildren);
     static void backtrace(NuclearFamily *theFam, uint8_t missingPar,
 			  int chrFirstMarker, int chrLastMarker);
@@ -373,8 +373,7 @@ struct State {
   uint8_t  ambigPrev;  // fits in 2 bits
 
   // Minimum number of recombinations to reach this state
-  // TODO: add checks to ensure we never reach UINT16_MAX?
-  uint16_t minRecomb;
+  float minRecomb;
 
   // For detecting cases where a parent without data has transmitted only one
   // haplotype to all children. Stores the number of markers (including
