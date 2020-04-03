@@ -2034,8 +2034,10 @@ bool Phaser::checkMinRecomb(uint64_t fullIV, uint64_t fullUnassigned,
   //       greater)
   else if ((_phaseMethod == PHASE_MINREC &&
 	    totalRecombs == theState->minRecomb &&
+	    // prevIndex >= 0: not a new error OR
+	    // theState->error & 1: is currently an error state
 	    (prevIndex >= 0 || (theState->error & 1)) &&
-	    (prevState->error == 0 || (theState->error & 2))) ||
+	    (prevState->error == 0 || theState->error)) ||
 	   (_phaseMethod == PHASE_MAXLIKE &&
 	    totalLikehood == theState->maxLikelihood) ) {
     theStateUpdated = true;
