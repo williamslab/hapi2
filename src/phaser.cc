@@ -3051,3 +3051,44 @@ void Phaser::tracePrior(int hmmIndex, int stateIdx) {
   } while(hmmIndex >= 0);
   fflush(stdout);
 }
+
+// For debugging:
+void Phaser::printStates() {
+  printStates(_hmm.length() - 1);
+}
+
+// For debugging:
+void Phaser::printStates(int hmmIndex) {
+  if (hmmIndex >= _hmm.length() || hmmIndex < 0)
+    return;
+
+  float minRecomb = FLT_MAX;
+  std::vector<int> minimal;
+
+  int numStates = _hmm[hmmIndex].length();
+  for(int idx = 0; idx < numStates; idx++) {
+    State *state = _hmm[ hmmIndex ][ idx ];
+
+    printf("iv = %ld, ambig = %ld, unassigned = %ld, minRecomb = %d, numSinceNonHet = %d\n",
+	   state->iv, state->ambig, state->unassigned, state->minRecomb,
+	   state->numMarkersSinceNonHetPar);
+    printf("  hmmIndex = %d, state = %d  (marker = %d)\n",
+	   hmmIndex, idx, _hmmMarker[hmmIndex]);
+
+    if (state->minRecomb < minRecomb) {
+      minRecomb = state->minRecomb;
+      minimal.clear();
+      minimal.push_back(idx);
+    }
+    else if (state->minRecomb == minRecomb) {
+      minimal.push_back(idx);
+    }
+  }
+
+  printf("\n");
+  printf("Overall minRecomb = %.1f, states:", minRecomb);
+  for(auto it = minimal.begin(); it != minimal.end(); it++) {
+    printf(" %d", *it);
+  }
+  printf("\n");
+}

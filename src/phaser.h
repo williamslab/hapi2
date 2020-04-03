@@ -220,6 +220,8 @@ class Phaser {
 				     BT_ambig_info &thePrevInfo,
 				     uint8_t &numAmbig1Recombs);
     static void tracePrior(int hmmIndex, int stateIdx);
+    static void printStates();
+    static void printStates(int hmmIndex);
 
 
     //////////////////////////////////////////////////////////////////
