@@ -408,6 +408,10 @@ void getFamiliesToBePhased(FILE * log, dynarray<NuclearFamily *> &toBePhased) {
 
       counts[parentsWithData][childrenWithData]++;
 
+//      if (parentsWithData == 2 && childrenWithData >= 3)
+//	fprintf(stderr, "%s %s %d\n", theFam->_parents->first->getId(),
+//		theFam->_parents->second->getId(), childrenWithData);
+
       if (shouldPhase)
 	toBePhased.append(theFam);
     }
