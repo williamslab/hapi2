@@ -2102,32 +2102,10 @@ bool Phaser::checkMinRecomb(uint64_t fullIV, uint64_t fullUnassigned,
       // exceeded, we update the values below to enable back tracing to use
       // those relevant to the chosen previous state
       newBestPrev = true;
-      // Because the canonical swap/phase type of <theState> may differ from
-      // the state that it's being changed to (i.e., the old values are an
-      // ambiguous alternative), we must swap <theState>'s values so that
-      // they match the new ones.  That way, bits set in e.g.,
-      // <theState->ambigParPhase> will have a consistent meaning.
-      uint8_t flipType = ((theState->iv ^ fullIV) >> lowOrderChildBit) & 3;
       theState->iv = fullIV;
       theState->maxPrevRecomb = numRecombs[0];
       theState->hetParent = hetParent;
       theState->parentPhase = curParPhase;
-      
-      theState->ambigParPhase =
-	swap01Phase[flipType][ theState->ambigParPhase & 15 ] |
-	(swap2Phase[flipType][ theState->ambigParPhase >> 4 ] << 4);
-    }
-    else {
-      // See the note in the prevoius branch above <flipType>; here we flip the
-      // values that will be newly added (as ambiguous alternatives) to be
-      // consistent with those in <theState>
-      // those in <theState>.
-      uint8_t flipType = ((theState->iv ^ fullIV) >> lowOrderChildBit) & 3;
-      // if hetParent < 2, parentPhase flips differently: only have two
-      // possibilities: flipped (1) or not (0):
-      flipType = isPI * flipType + (1 - isPI) * ((flipType >> hetParent) & 1);
-      curParPhase ^= flipType;
-      altPhaseType ^= flipType;
     }
 
     if (theState->homParentGeno == G_MISS)
