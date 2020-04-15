@@ -142,7 +142,8 @@ class Phaser {
 			      int numDataChildren, int numMarkersSincePrev);
     static void checkPenalty(const State *prevState, const State &curPartial,
 			     uint8_t isPI, uint8_t missingPar,
-			     int numMarkersSincePrev, uint64_t &penalty,
+			     int numMarkersSincePrev, uint64_t &allButOneIV,
+			     uint8_t &applyPenalty,
 			     int16_t &numMarkersSinceNonHetPar,
 			     int16_t &numMarkersSinceOneHetPar,
 			     const uint64_t childrenData[5]);
@@ -170,7 +171,8 @@ class Phaser {
 				   uint64_t &ambig1Unassigned);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t ambig1Unassigned,
-			     uint64_t recombs, uint64_t penalty,
+			     uint64_t recombs, uint64_t allButOneIV,
+			     uint8_t applyPenalty,
 			     const State *prevState, uint64_t stdAmbigOnlyPrev,
 			     uint64_t ambig1PrevInfo, uint8_t hetParent,
 			     uint8_t homParentGeno, uint8_t initParPhase,

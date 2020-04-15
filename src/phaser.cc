@@ -866,7 +866,9 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
   //     above checkPenalty()
   // stores the IV for the relevant parent having only one haplotype transmitted
   // enables checks for whether the penalty should be applied in updateStates()
-  uint64_t penalty = 0;
+  uint64_t allButOneIV = 0;
+  // Should we actually apply a penalty to the states being generated?
+  uint8_t applyPenalty = 0;
   // For determining whether to trigger the two types of penalties:
   // Number of markers since the last one heterozygous for whichever parent is
   // homozygous here (for non-PI states)
@@ -876,8 +878,8 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
   int16_t numMarkersSinceOneHetPar = 0;
   if (missingPar > 0) {
     checkPenalty(prevState, curPartial, isPI, missingPar, numMarkersSincePrev,
-		 penalty, numMarkersSinceNonHetPar, numMarkersSinceOneHetPar,
-		 childrenData);
+		 allButOneIV, applyPenalty, numMarkersSinceNonHetPar,
+		 numMarkersSinceOneHetPar, childrenData);
   }
 
   // (3) if curPartial is partly informative, for heterozygous children:
@@ -960,8 +962,8 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
   // Above equivalent to the line below but has no branching
   //uint8_t altPhaseType = (isPI) ? 3 : 1;
   updateStates(fullIV, fullAmbig, fullUnassigned, ambig1Unassigned, recombs,
-	       penalty, prevState, stdAmbigOnlyPrev, ambig1PrevInfo,
-	       curPartial.hetParent, curPartial.homParentGeno,
+	       allButOneIV, applyPenalty, prevState, stdAmbigOnlyPrev,
+	       ambig1PrevInfo, curPartial.hetParent, curPartial.homParentGeno,
 	       /*initParPhase=default phase=*/ 0, altPhaseType, prevIdx,
 	       IVambigPar, minMaxRec, hetParentUndefined, childrenData,
 	       numDataChildren, numMarkersSinceNonHetPar,
@@ -1001,7 +1003,7 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
     // Now ready to look up or create full states with the <fullIV> and
     // <fullAmbig> values, etc.
     updateStates(fullIV, fullAmbig, fullUnassigned, ambig1Unassigned, recombs,
-		 penalty, prevState, stdAmbigOnlyPrev,
+		 allButOneIV, applyPenalty, prevState, stdAmbigOnlyPrev,
 		 ambig1PrevInfo, /*curPartial.hetParent=*/2,
 		 /*homParentGeno=*/G_MISS, /*initParPhase=parent 0 flip=*/1,
 		 /*altPhaseType=parent 1 flip=*/ 2, prevIdx,
@@ -1016,31 +1018,27 @@ void Phaser::mapPrevToFull(const State *prevState, int64_t prevIdx,
 // manifest as a long stretch of markers wherein only one parent is
 // heterozygous. To ensure that we find the right IV when we eventually do
 // encounter an informative marker for this parent, we detect this scenario
-// (including requiring the IV to be one recombination away from having only
-// one haplotype at the most recent informative marker for this parent) and
-// impose a penalty for IVs that keep the same transmission status for the
-// child that had the outlier haplotype at the most recent informative marker.
-//
-// The penalty occurs when transitioning to a state that is heterozygous for
-// the indicated parent. We will be performing such a transition whenever the
-// current state's heterozygous parent is different from the previous state
-// (which was, for the <numMarkersSinceNonHetPar> value to be large,
-// necessarily heterozygous for the other parent only).
+// (including requiring the IV to be one or two recombinations away from having
+// only one haplotype at the most recent informative marker for this parent).
+// We impose a penalty that favors recombining the child/children that had the
+// outlier haplotypes at the most recent informative markers.
 //
 // A second and related case occurs when we have data for one parent and the
 // inheritance vector gets switched such that the transmitted haplotypes for
 // the parent with data are associated with the other parent. In this case,
 // sites that are heterozygous for the data parent will be heterozygous for
 // both parents (since the children's alleles will be misphased). We penalize
-// such both parent het states after a sufficient number of them occurs in
+// such both-parent-het states after a sufficient number of them occurs in
 // sequence.
 void Phaser::checkPenalty(const State *prevState, const State &curPartial,
 			  uint8_t isPI, uint8_t missingPar,
-			  int numMarkersSincePrev, uint64_t &penalty,
+			  int numMarkersSincePrev, uint64_t &allButOneIV,
+			  uint8_t &applyPenalty,
 			  int16_t &numMarkersSinceNonHetPar,
 			  int16_t &numMarkersSinceOneHetPar,
 			  const uint64_t childrenData[5]) {
-  // minimum count of number of parent haplotypes transmitted: 0 or 1
+  // minimum count of number of parent haplotypes transmitted: 1 or 2.
+  // initialize to impossible value so we can detect if it's changed:
   int minHapTrans = 0;
   // want to analyze parent 0 if bit 0 in missingPar is 1; otherwise start from
   // parent 1 (result of this is either 0 or 1):
@@ -1049,22 +1047,31 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
   // iterate to 1 (result of this is either 1 or 2):
   int limitP = (missingPar >> 1) + 1;
   for(int p = firstP; p < limitP; p++) {
-    uint64_t allButOneIV = 0;
+    // When the inheritance vector has only one (or two) children with a given
+    // haplotype, we maybe in a "penalty" scenario. Detect the IV and assign
+    // later to <allButOneIV> if needed
+    uint64_t maybeAllButOneIV = 0;
 
-    // The inheritance vector with all but one haplotype being the same:
+    // Find the inheritance vector with all but one haplotype being the same, if
+    // it is such:
     uint64_t parHap = prevState->iv & _parBits[p];
     uint64_t oppParHap = parHap ^ _parBits[p];
 
-    if (prevState->unassigned & _parBits[p]) {   // Some unassigned bits for <p>
+    if (prevState->unassigned & _parBits[p]) {
+      // Some unassigned bits for <p>; slightly different but similar issues
+      // arise
       uint64_t assignedParHap = parHap & ~prevState->unassigned;
       // If all assigned bits are 0 or 1:
       if (assignedParHap == 0 ||
 	  assignedParHap == (_parBits[p] & ~prevState->unassigned)) {
-	minHapTrans = 1; // in fact, this is all children receiving same
-	allButOneIV = prevState->unassigned & _parBits[p];
+	// here, all children received the same haplotype
+	minHapTrans = 1;
+	maybeAllButOneIV = prevState->unassigned & _parBits[p];
       }
     }
-    else {   // All bits assigned for <p>
+    else {
+      // All bits assigned for <p>
+
       // Only 1 or 2 bits set in parHap or oppParHap?
       // * Only 1 corresponds to either all but one of the children or all
       //   children except one receiving the same haplotype.
@@ -1072,17 +1079,18 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
       //   recombine near each other and produce a oneHapTrans scenario
       // Note that the real indicator that oneTransHap has happened is the
       // long string of markers where the relevant parent is not heterozygous,
-      // so being somewhat liberal here is not likely to go wrong.
+      // so we're being somewhat liberal here, but this is not likely to yield
+      // a penalty in non-oneHapTrans scenarios.
       uint64_t parHaps[2] = { parHap, oppParHap };
       uint64_t numTrans[2] = { popcount(parHap), popcount(oppParHap) };
       // which pattern (parHap or oppParHap) has min number of 1s (popcount)?
       int minPat = (numTrans[0] <= numTrans[1]) ? 0 : 1;
 
       if (numTrans[minPat] > 0 && numTrans[minPat] <= 2) {
-	// TODO: for 2 children, want <= 1 not <= 2
+	// TODO: for 2 children, want <= 1 not <= 2 (maybe also for 3 children?)
 	assert(minHapTrans == 0); // if violated, we need to track two penalties
 	minHapTrans = numTrans[minPat];
-	allButOneIV = parHaps[minPat];
+	maybeAllButOneIV = parHaps[minPat];
       }
     }
 
@@ -1099,11 +1107,14 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
     // the outlier haplotype is missing, the marker is trivially ambiguous
     // for which parent is heterozygous, and we should not reset
     // <numMarkersSinceNonHetPar>
-    if (!accumNumSinceNonHet && (childrenData[G_MISS] & allButOneIV))
+    if (!accumNumSinceNonHet && (childrenData[G_MISS] & maybeAllButOneIV))
       accumNumSinceNonHet = true;
 
 
     if (prevState->numMarkersSinceNonHetPar < 0) {
+      // so that we know which children probably (silently) recombined
+      allButOneIV = maybeAllButOneIV;
+
       // have already applied the penalty previously; have there been enough
       // markers to apply a second penalty?
       if (prevState->numMarkersSinceNonHetPar - numMarkersSincePrev <
@@ -1116,7 +1127,7 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
 	//       but the penalty applies due to past markers
 	// Has been 2x threshold distance: apply another penalty (which should
 	// force a recombination)
-	penalty = allButOneIV;
+	applyPenalty = 1;
       }
 
       // now decide what value of <numMarkersSinceNonHetPar> should be assigned
@@ -1154,7 +1165,8 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
 	//       those markers have already been encountered. We may still
 	//       reset <numMarkersSinceNonHetPar> for the state being formed,
 	//       but the penalty applies due to past markers
-	penalty = allButOneIV;
+	allButOneIV = maybeAllButOneIV;
+	applyPenalty = 1;
       }
 
       if (accumNumSinceNonHet) {
@@ -1166,7 +1178,7 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
 	    // status as the last site (see where <accumNumSinceNonHet> is
 	    // assigned above)
 	    curPartial.hetParent == 2) {
-	  if (penalty)
+	  if (applyPenalty)
 	    // same parent is heterozygous and penalty applied: continue
 	    // accumulating number of markers and make count negative
 	    numMarkersSinceNonHetPar =
@@ -1500,7 +1512,8 @@ void Phaser::fixRecombFromAmbig(uint64_t &fullIV, uint64_t &recombs,
 // to the optimality of <prevState>.
 void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint64_t fullUnassigned, uint64_t ambig1Unassigned,
-			  uint64_t recombs, uint64_t penalty,
+			  uint64_t recombs, uint64_t allButOneIV,
+			  uint8_t applyPenalty,
 			  const State *prevState, uint64_t stdAmbigOnlyPrev,
 			  uint64_t ambig1PrevInfo, uint8_t hetParent,
 			  uint8_t homParentGeno, uint8_t initParPhase,
@@ -1523,9 +1536,11 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // Is the penalty due to the fact that the IV values corresponding to a
   // parent are unassigned?
   uint64_t unassignedPenalty = 0;
-  if (fullUnassigned && (penalty & fullUnassigned) == fullUnassigned) {
-    unassignedPenalty = penalty;
-    penalty = 0;
+  if (applyPenalty && fullUnassigned &&
+			    (allButOneIV & fullUnassigned) == fullUnassigned) {
+    unassignedPenalty = allButOneIV;
+    allButOneIV = 0;
+    applyPenalty = 0;
   }
 
   // Note: (hetParent >> 1) == 1 iff hetParent == 2. It is 0 for the other
@@ -1536,6 +1551,9 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // number of recombinations from the previous state? Decided below
   uint8_t ambigLocal = 0;
 
+  assert(allButOneIV == 0 ||
+	 (prevState->numMarkersSinceNonHetPar < 0 || applyPenalty));
+
   // For cases where a missing data parent transmitted only a single haplotype:
   // (which is only detectable by examining the number of states where that
   // parent is not inferred to be heterozygous)
@@ -1543,13 +1561,23 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // how many penalty "recombinations" should we apply?
   int8_t penaltyCount = 0;
   const uint8_t THE_PENALTY = 1; // if there is a penalty
-  if (penalty) { // are the IV values in the penalty scenario?
+  if (applyPenalty) { // are the IV values in the penalty scenario?
     for(int p = 0; p < 2; p++) {
-      if ((~recombs) & penalty & _parBits[p])
+      if ((~recombs) & allButOneIV & _parBits[p])
 	// no recombination in the one child that differs for a missing data
 	// parent that hasn't had an informative marker for a long stretch:
 	// apply penalty
 	penaltyCount += THE_PENALTY;
+    }
+  }
+  else if (allButOneIV) {
+    for(int p = 0; p < 2; p++) {
+      if (recombs & allButOneIV & _parBits[p])
+	// This state has a recombination in the outlier child (technically
+	// we allow two children sometimes) that we previously penalized
+	// the path for. Remove the penalty as the putative recombination
+	// is now accounted for:
+	penaltyCount -= THE_PENALTY;
     }
   }
 
@@ -1644,13 +1672,23 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     curCount[0] = popcount(recombs);
 
     int8_t curPenalty = 0;
-    if (penalty) { // are the IV values in the penalty scenario?
+    if (applyPenalty) { // are the IV values in the penalty scenario?
       for(int p = 0; p < 2; p++) {
-	if ((~recombs) & penalty & _parBits[p])
+	if ((~recombs) & allButOneIV & _parBits[p])
 	  // no recombination in the one child that differs for a missing data
 	  // parent that hasn't had an informative marker for a long stretch:
 	  // apply penalty
 	  curPenalty += THE_PENALTY;
+      }
+    }
+    else if (allButOneIV) {
+      for(int p = 0; p < 2; p++) {
+	if (recombs & allButOneIV & _parBits[p])
+	  // This state has a recombination in the outlier child (technically
+	  // we allow two children sometimes) that we previously penalized
+	  // the path for. Remove the penalty as the putative recombination
+	  // is now accounted for:
+	  curPenalty -= THE_PENALTY;
       }
     }
 
@@ -1830,13 +1868,23 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 
       // For next state: reset and update penalty "recombinations":
       penaltyCount = 0;
-      if (penalty) { // are the IV values in the penalty scenario?
+      if (applyPenalty) { // are the IV values in the penalty scenario?
 	for(int p = 0; p < 2; p++) {
-	  if ((~recombs) & penalty & _parBits[p])
+	  if ((~recombs) & allButOneIV & _parBits[p])
 	    // no recombination in the one child that differs for a missing data
 	    // parent that hasn't had an informative marker for a long stretch:
 	    // apply penalty
 	    penaltyCount += THE_PENALTY;
+	}
+      }
+      else if (allButOneIV) {
+	for(int p = 0; p < 2; p++) {
+	  if (recombs & allButOneIV & _parBits[p])
+	    // This state has a recombination in the outlier child (technically
+	    // we allow two children sometimes) that we previously penalized
+	    // the path for. Remove the penalty as the putative recombination
+	    // is now accounted for:
+	    penaltyCount -= THE_PENALTY;
 	}
       }
 
