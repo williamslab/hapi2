@@ -1572,11 +1572,13 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   }
   else if (allButOneIV) {
     for(int p = 0; p < 2; p++) {
-      if (recombs & allButOneIV & _parBits[p])
+      if (recombs & allButOneIV & _parBits[p] & ~fullAmbig)
 	// This state has a recombination in the outlier child (technically
 	// we allow two children sometimes) that we previously penalized
 	// the path for. Remove the penalty as the putative recombination
 	// is now accounted for:
+	// Don't do this if the recombination is ambiguous: the penalty was
+	// for a specific haplotype, not one from either parent
 	penaltyCount -= THE_PENALTY;
     }
   }
@@ -1683,11 +1685,13 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     }
     else if (allButOneIV) {
       for(int p = 0; p < 2; p++) {
-	if (recombs & allButOneIV & _parBits[p])
+	if (recombs & allButOneIV & _parBits[p] & ~fullAmbig)
 	  // This state has a recombination in the outlier child (technically
 	  // we allow two children sometimes) that we previously penalized
 	  // the path for. Remove the penalty as the putative recombination
 	  // is now accounted for:
+	  // Don't do this if the recombination is ambiguous: the penalty was
+	  // for a specific haplotype, not one from either parent
 	  curPenalty -= THE_PENALTY;
       }
     }
@@ -1879,11 +1883,13 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       }
       else if (allButOneIV) {
 	for(int p = 0; p < 2; p++) {
-	  if (recombs & allButOneIV & _parBits[p])
+	  if (recombs & allButOneIV & _parBits[p] & ~fullAmbig)
 	    // This state has a recombination in the outlier child (technically
 	    // we allow two children sometimes) that we previously penalized
 	    // the path for. Remove the penalty as the putative recombination
 	    // is now accounted for:
+	    // Don't do this if the recombination is ambiguous: the penalty was
+	    // for a specific haplotype, not one from either parent
 	    penaltyCount -= THE_PENALTY;
 	}
       }
