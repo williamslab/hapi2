@@ -246,8 +246,8 @@ class Phaser {
     struct hashIVAmbig {
       size_t operator()(iv_ambig const key) const {
 	// make a better hash function?
-	return std::tr1::hash<uint64_t>{}(std::get<0>(*key)) +
-	       std::tr1::hash<uint64_t>{}(std::get<1>(*key)) +
+	return std::hash<uint64_t>{}(std::get<0>(*key)) +
+	       std::hash<uint64_t>{}(std::get<1>(*key)) +
 	       // unassigned bits aren't expected to be anything but 0 for most
 	       // values so won't distinguish them.
 	       // When they are non-zero, we also expect the other two values
@@ -274,14 +274,13 @@ class Phaser {
     struct hashBTinfo {
       size_t operator()(BT_ambig_info const key) const {
 	// make a better hash function?
-	return std::tr1::hash<uint32_t>{}(key.stateIdx) +
-	       std::tr1::hash<uint64_t>{}(key.iv) +
+	return std::hash<uint32_t>{}(key.stateIdx) +
+	       std::hash<uint64_t>{}(key.iv) +
 	       // during back tracing, most ambig bits will be 0 so won't
 	       // really distinguish them, so we won't hash but use the raw
 	       // value:
 	       key.ambig +
-	       std::tr1::hash<uint8_t>{}( (key.ambigParPhase << 2) |
-								  key.parPhase);
+	       std::hash<uint8_t>{}( (key.ambigParPhase << 2) | key.parPhase);
       }
     };
     struct eqBTinfo {
