@@ -89,9 +89,15 @@ class CmdLineOpts {
     // the program quits if any of the output files exist (except the log file)
     static int forceWrite;
 
-    // Introduce an error state at one marker if doing so saves at least this
-    // many recombinations. 0 disables.
-    static int max1MarkerRecomb;
+    // Introduce an error state if doing so saves at least this many
+    // recombinations. 0 disables.
+    static int maxNoErrRecombs;
+
+    // Number of successive informative markers that can be treated as errors
+    // (Really the number of markers back to look for a potential previous
+    // state where the intervening informative markers will be flagged as
+    // errors)
+    static uint8_t errorLength;
 
     // For detecting when a parent has transmitted only one haplotype
     static int oneHapTransThreshold;

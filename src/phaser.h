@@ -6,6 +6,7 @@
 #include <genetio/personbulk.h>
 #include <sparsehash/dense_hash_map>
 #include <sparsehash/dense_hash_set>
+#include <deque>
 
 #ifndef PHASER_H
 #define PHASER_H
@@ -135,11 +136,13 @@ class Phaser {
 			       uint8_t missingPar, int numChildren,
 			       int numMissChildren);
     static uint8_t isIVambigPar(const State *state, uint8_t missingPar);
-    static void mapPrevToFull(const State *prevState, int64_t prevIdx,
-			      const State &curPartial, float minMaxRec[2],
+    static void mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
+			      uint32_t prevIdx, const State &curPartial,
+			      float minMaxRec[2],
 			      const uint64_t childrenData[5],
 			      uint8_t IVambigPar, uint8_t missingPar,
-			      int numDataChildren, int numMarkersSincePrev);
+			      int numDataChildren, int numMarkersSincePrev,
+			      bool &zeroRecombsThisPrev);
     static void checkPenalty(const State *prevState, const State &curPartial,
 			     uint8_t isPI, uint8_t missingPar,
 			     int numMarkersSincePrev, uint64_t &allButOneIV,
@@ -176,12 +179,13 @@ class Phaser {
 			     const State *prevState, uint64_t stdAmbigOnlyPrev,
 			     uint64_t ambig1PrevInfo, uint8_t hetParent,
 			     uint8_t homParentGeno, uint8_t initParPhase,
-			     uint8_t altPhaseType, int64_t prevIndex,
-			     uint8_t IVambigPar, float minMaxRec[2],
-			     bool hetParentUndefined,
+			     uint8_t altPhaseType, uint8_t prevHMMIndex,
+			     uint32_t prevIndex, uint8_t IVambigPar,
+			     float minMaxRec[2], bool hetParentUndefined,
 			     const uint64_t childrenData[5],int numDataChildren,
 			     int16_t numMarkersSinceNonHetPar,
-			     int16_t numMarkersSinceOneHetPar);
+			     int16_t numMarkersSinceOneHetPar,
+			     bool &zeroRecombsThisPrev);
     static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
 					      uint8_t &hetParIsDiff);
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
@@ -191,18 +195,22 @@ class Phaser {
 					    const uint64_t unassigned,
 					    uint64_t &unambig,
 					    uint64_t &ambigStd);
-    static bool checkMinRecomb(uint64_t fullIV, uint64_t fullUnassigned,
+    static bool checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
 			       uint64_t ambig1Unassigned, State *theState,
 			       const State *prevState, uint8_t hetParent,
 			       uint8_t homParentGeno, uint8_t curParPhase,
 			       uint8_t altPhaseType, uint8_t ambigLocal,
-			       int64_t prevIndex, uint8_t IVambigPar,
-			       float minMaxRec[2],
+			       uint8_t prevHMMIndex, uint32_t prevIndex,
+			       uint8_t IVambigPar, float minMaxRec[2],
 			       int16_t numMarkersSinceNonHetPar,
 			       int16_t numMarkersSinceOneHetPar,
 			       float totalRecombs, float totalLikehood,
-			       size_t numRecombs[2], int lowOrderChildBit);
-    static void updateAmbigPrev(State *theState, int64_t prevIndex,
+			       size_t numRecombs, int lowOrderChildBit);
+    static int8_t decideOptimalState(State *theState, const State *prevState,
+				     uint8_t prevHMMIndex, float totalRecombs,
+				     float totalLikelihood,
+				     size_t newRecombs);
+    static void updateAmbigPrev(State *theState, uint32_t prevIndex,
 				bool newBestPrev);
     static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 					  float minMaxRec[2],
@@ -234,6 +242,13 @@ class Phaser {
     static dynarray< dynarray<State*> > _hmm;
     static dynarray<int> _hmmMarker;
     static dynarray< dynarray<uint32_t> > _ambigPrevLists;
+
+    // States at previous markers (up to CmdLineOpts::errorLength previous
+    // informative sites) that (a) transition to the next marker with >= 1
+    // recombination and therefore (b) have the potential to be a previous
+    // state along a path that treats one or more (up to
+    // CmdLineOpts::errorLength) markers as errors
+    static std::deque< std::pair<int, uint32_t> > _prevErrorStates;
 
     // Container for parent and children's genotypes. Needed occasionally
     // during back tracing
@@ -364,6 +379,10 @@ struct State {
   // TODO: add checks to ensure the number of states does not grow beyond
   // the capacity here? Unlikely to be more than 2^32 states but could check
   uint32_t prevState;
+
+  // relative HMM index -- many HMM indexes back -- for the previous state
+  // If non-error, this will be 1
+  uint8_t prevHMMIndex;
 
   // Ambiguous previous state? If this value is 1, then <prevState> stores
   // in every 6 bits starting from the lowest order bits, the indexes to

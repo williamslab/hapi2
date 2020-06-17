@@ -11,6 +11,7 @@
 #include "cmdlineopts.h"
 
 #define DEFAULT_NO_ERROR_MAX	2
+#define DEFAULT_ERROR_LENGTH    5
 
 ////////////////////////////////////////////////////////////////////////////////
 // define/initialize static members
@@ -32,7 +33,8 @@ char *CmdLineOpts::onlyChr = NULL;
 int   CmdLineOpts::startPos = 0;
 int   CmdLineOpts::endPos = INT_MAX;
 int   CmdLineOpts::forceWrite = 0;
-int   CmdLineOpts::max1MarkerRecomb = DEFAULT_NO_ERROR_MAX;
+int   CmdLineOpts::maxNoErrRecombs = DEFAULT_NO_ERROR_MAX;
+uint8_t CmdLineOpts::errorLength = DEFAULT_ERROR_LENGTH;
 int   CmdLineOpts::oneHapTransThreshold = 250;
 int   CmdLineOpts::bothParHetThreshold = 100;
 int   CmdLineOpts::detectCO = 0;
@@ -48,6 +50,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     START_POS = CHAR_MAX + 1,
     END_POS,
     NO_ERROR_MAX,
+    ERROR_DIST,
     DETECT_CO,
     EDGE_CO,
     MIN_PAR,
@@ -78,6 +81,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"start", required_argument, NULL, START_POS},
     {"end", required_argument, NULL, END_POS},
     {"no_err_max", required_argument, NULL, NO_ERROR_MAX},
+    {"err_dist", required_argument, NULL, ERROR_DIST},
 //    {"impute2", no_argument, &CmdLineOpts::useImpute2Format, 1},
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
     {"force", no_argument, &CmdLineOpts::forceWrite, 1},
@@ -206,12 +210,39 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	}
 	break;
       case NO_ERROR_MAX:
-	max1MarkerRecomb = strtol(optarg, &endptr, 10);
+	maxNoErrRecombs = strtol(optarg, &endptr, 10);
 	if (errno != 0 || *endptr != '\0') {
 	  fprintf(stderr, "ERROR: unable to parse no_err_max option as integer\n");
 	  if (errno != 0)
 	    perror("strtol");
 	  exit(2);
+	}
+	if (maxNoErrRecombs < 0) {
+	  fprintf(stderr, "ERROR: no_err_max option must not be negative\n");
+	  exit(2);
+	}
+	break;
+      case ERROR_DIST:
+	{
+	  int providedErrLength = strtol(optarg, &endptr, 10);
+	  if (errno != 0 || *endptr != '\0') {
+	    fprintf(stderr, "ERROR: unable to parse err_dist option as integer\n");
+	    if (errno != 0)
+	      perror("strtol");
+	    exit(2);
+	  }
+	  if (providedErrLength <= 0) {
+	    fprintf(stderr, "ERROR: err_dist option must be greater than 0\n");
+	    if (providedErrLength == 0) {
+	      fprintf(stderr, "       to disable error detection, use --no_err_max 0\n");
+	    }
+	    exit(2);
+	  }
+	  else if (providedErrLength > UINT8_MAX) {
+	    fprintf(stderr, "ERROR: maximum err_dist value is %u\n", UINT8_MAX);
+	    exit(2);
+	  }
+	  errorLength = (uint8_t) providedErrLength;
 	}
 	break;
       case DETECT_CO:
@@ -330,7 +361,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     if (haveGoodArgs)
       fprintf(stderr, "\n");
     fprintf(stderr,
-	    "WARNING: using ending position, with no starting position\n");
+	    "WARNING: using ending position with no starting position\n");
   }
 
   if (detectCO && !edgeCO)
@@ -420,6 +451,9 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "\t\t\tsingle marker before it is called an error. Default: %d.\n",
 	  DEFAULT_NO_ERROR_MAX);
   fprintf(out, "\t\t\t0 disables; 1 calls single marker non-crossovers errors\n");
+  fprintf(out, "  --err_dist <#>\tMaximum number of sequential informative markers that\n");
+  fprintf(out, "\t\t\tcan be called as an error. Default: %d.\n",
+	  DEFAULT_ERROR_LENGTH);
   fprintf(out, "  --edge_co <#>\t\tAllow detection of the \"background haplotype\" with fewer\n");
   fprintf(out, "\t\t\tthan --detect_co markers at start/end of chromosomes.\n");
   fprintf(out, "\t\t\tA child must have a sequence of this many informative\n");
