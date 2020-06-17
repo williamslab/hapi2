@@ -65,15 +65,58 @@ int main(int argc, char **argv) {
 
     fprintf(out, "\n");
 
-    if (CmdLineOpts::onlyChr != NULL) {
-      fprintf(out, "Chromosome:\t\t%s\n\n", CmdLineOpts::onlyChr);
+    if (CmdLineOpts::onlyChr != NULL || CmdLineOpts::startPos != 0 ||
+	CmdLineOpts::endPos != INT_MAX) {
+      if (CmdLineOpts::onlyChr != NULL)
+	fprintf(out, "Chromosome:\t\t%s\n", CmdLineOpts::onlyChr);
+      if (CmdLineOpts::startPos != 0)
+	fprintf(out, "Start position:\t\t%d\n", CmdLineOpts::startPos);
+      if (CmdLineOpts::endPos != INT_MAX)
+	fprintf(out, "End position:\t\t%d\n", CmdLineOpts::endPos);
+      fprintf(out, "\n");
     }
 
-    fprintf(out, "Maximum number of single marker recombinations:\t");
-    if (CmdLineOpts::max1MarkerRecomb == 0)
+    fprintf(out, "Errors:\t\t\t");
+    if (CmdLineOpts::maxNoErrRecombs == 0)
       fprintf(out, "disabled\n\n");
-    else
-      fprintf(out, "%d\n\n", CmdLineOpts::max1MarkerRecomb);
+    else {
+      fprintf(out, "enabled\n");
+      fprintf(out, "Number of recombinations to trigger error:\t%d\n",
+	      CmdLineOpts::maxNoErrRecombs);
+      fprintf(out, "Maximum informative markers per error:\t\t%d\n",
+	      CmdLineOpts::errorLength);
+      fprintf(out, "\n");
+    }
+
+    if (CmdLineOpts::minNumParentsData > 0 ||
+	CmdLineOpts::minNumChildrenData > 2) {
+      if (CmdLineOpts::minNumParentsData > 0)
+	fprintf(out, "Minimum number of parents per family:\t\t%d\n",
+		CmdLineOpts::minNumParentsData);
+      if (CmdLineOpts::minNumChildrenData > 2)
+	fprintf(out, "Minimum number of children per family:\t\t%d\n",
+		CmdLineOpts::minNumChildrenData);
+      fprintf(out, "\n");
+    }
+
+    if (CmdLineOpts::forceMissingPar) {
+      fprintf(out, "Omitting parent data for:\t\t\t");
+      switch (CmdLineOpts::forceMissingPar) {
+	case 1:
+	  fprintf(out, "dad\n\n");
+	  break;
+	case 2:
+	  fprintf(out, "mom\n\n");
+	  break;
+	case 3:
+	  fprintf(out, "both parents\n\n");
+	  break;
+	default:
+	  fprintf(out, "ERROR: value of %d\n\n", CmdLineOpts::forceMissingPar);
+	  exit(1);
+	  break;
+      }
+    }
 
     fprintf(out, "Output to be generated in output directory:\n");
     if (CmdLineOpts::vcfOutput) {
@@ -140,12 +183,21 @@ int main(int argc, char **argv) {
 
   for(int o = 0; o < 2; o++) {
     FILE *out = outs[o];
-    fprintf(out, "\nHave data for %d individuals and %d nuclear families.\n",
-	    PersonBulk::_allIndivs.length(), numFamsToBePhased);
+    fprintf(out, "\n");
+//    fprintf(out, "Have data for %d individuals.",
+//	    PersonBulk::_allIndivs.length());
+    fprintf(out, "Have data for %d nuclear families with >= %d children",
+	    numFamsToBePhased, CmdLineOpts::minNumChildrenData);
+    if (CmdLineOpts::minNumParentsData == 1)
+      fprintf(out, " and >= 1 parent");
+    if (CmdLineOpts::minNumParentsData == 2)
+      fprintf(out, " and 2 parents");
+    fprintf(out, ".\n\n");
   }
   if (numFamsToBePhased == 0) {
     for(int o = 0; o < 2; o++)
-      fprintf(outs[o], "ERROR: no families with two or more children to phase so exiting.\n");
+      fprintf(outs[o], "ERROR: no families with %d or more children to phase so exiting.\n",
+	      CmdLineOpts::minNumChildrenData);
     exit(5);
   }
 
@@ -159,7 +211,7 @@ int main(int argc, char **argv) {
 
     for(int o = 0; o < 2; o++) {
       FILE *out = outs[o];
-      fprintf(out, "Phasing families with two or more children... %d / %d",
+      fprintf(out, "Phasing families... %d / %d",
 	      numFinished, numFamsToBePhased);
     }
     printf("\r");
@@ -246,7 +298,7 @@ int main(int argc, char **argv) {
   // Finished phasing all families!
   for(int o = 0; o < 2; o++) {
     FILE *out = outs[o];
-    fprintf(out, "Phasing families with two or more children... done.");
+    fprintf(out, "Phasing families... done.");
   }
   printf("               \n");
   fprintf(log, "\n");
