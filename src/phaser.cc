@@ -1116,18 +1116,25 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
     else {
       // All bits assigned for <p>
 
-      // Only a single bit set in parHap or oppParHap?
-      // This corresponds to either all but one of the children or all children
-      // except one receiving the same haplotype.
-      if (parHap && !(parHap & (parHap - 1))) {
+      // Only 1 or 2 bits set in parHap or oppParHap?
+      // * Only 1 corresponds to either all but one of the children or all
+      //   children except one receiving the same haplotype.
+      // * Also check for 2 since in some cases, two children could
+      //   recombine near each other and produce a oneHapTrans scenario
+      // Note that the real indicator that oneTransHap has happened is the
+      // long string of markers where the relevant parent is not heterozygous,
+      // so we're being somewhat liberal here, but this is not likely to yield
+      // a penalty in non-oneHapTrans scenarios.
+      uint64_t parHaps[2] = { parHap, oppParHap };
+      uint8_t numTrans[2] = { popcount(parHap), popcount(oppParHap) };
+      // which pattern (parHap or oppParHap) has min number of 1s (popcount)?
+      int minPat = (numTrans[0] <= numTrans[1]) ? 0 : 1;
+
+      if (numTrans[minPat] > 0 && numTrans[minPat] <= 2) {
+	// TODO: for 2 children, want <= 1 not <= 2 (maybe also for 3 children?)
 	assert(minHapTrans == 0); // if violated, we need to track two penalties
-	minHapTrans = 1;
-	maybeAllButOneIV = parHap;
-      }
-      else if (oppParHap && !(oppParHap & (oppParHap - 1))) {
-	assert(minHapTrans == 0); // if violated, we need to track two penalties
-	minHapTrans = 1;
-	maybeAllButOneIV = oppParHap;
+	minHapTrans = numTrans[minPat];
+	maybeAllButOneIV = parHaps[minPat];
       }
     }
 
