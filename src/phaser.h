@@ -147,7 +147,7 @@ class Phaser {
 			     uint8_t isPI, uint8_t missingPar,
 			     int numMarkersSincePrev, uint64_t &allButOneIV,
 			     uint8_t &applyPenalty,
-			     int16_t &numMarkersSinceNonHetPar,
+			     int16_t numMarkersSinceNonHetPar[2],
 			     int16_t &numMarkersSinceOneHetPar,
 			     const uint64_t childrenData[5]);
     static void handlePI(const State *prevState, uint64_t &fullIV,
@@ -183,7 +183,7 @@ class Phaser {
 			     uint32_t prevIndex, uint8_t IVambigPar,
 			     float minMaxRec[2], bool hetParentUndefined,
 			     const uint64_t childrenData[5],int numDataChildren,
-			     int16_t numMarkersSinceNonHetPar,
+			     int16_t numMarkersSinceNonHetPar[2],
 			     int16_t numMarkersSinceOneHetPar,
 			     bool &zeroRecombsThisPrev);
     static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
@@ -202,7 +202,7 @@ class Phaser {
 			       uint8_t altPhaseType, uint8_t ambigLocal,
 			       uint8_t prevHMMIndex, uint32_t prevIndex,
 			       uint8_t IVambigPar, float minMaxRec[2],
-			       int16_t numMarkersSinceNonHetPar,
+			       int16_t numMarkersSinceNonHetPar[2],
 			       int16_t numMarkersSinceOneHetPar,
 			       float totalRecombs, float totalLikehood,
 			       size_t numRecombs, int lowOrderChildBit);
@@ -402,7 +402,8 @@ struct State {
   // was heterozygous for the parent in question.
   // This is signed and set to be negative when the penalty associated with
   // treating the IV as if all children had the same haplotype has been applied.
-  int16_t numMarkersSinceNonHetPar;
+  // TODO: rename
+  int16_t numMarkersSinceNonHetPar[2];
 
   // For detecting cases where the children's IVs have been swapped from a
   // parent for which we have data to a parent without data. This manifests

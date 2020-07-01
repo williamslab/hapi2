@@ -681,6 +681,11 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       newState->prevHMMIndex = 1;
       newState->ambigPrev = 0;
       newState->minRecomb = 0.0f;
+      // How many makrers since each parent (0 or 1) passed by a heterozygous
+      // marker?
+      // First assume 0:
+      newState->numMarkersSinceNonHetPar[0] =
+				    newState->numMarkersSinceNonHetPar[1] = 0;
       uint8_t isPI = newState->hetParent >> 1;
       // PI states are informative for both parents (both are heteterozygous),
       // so there are 0 informative markers since seeing the non-het parent if
@@ -690,7 +695,9 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates, int marker,
       // since the beginning of the chromosome:
       bool homParMissing =
 		  (1 - isPI) && ((1 << (1 - newState->hetParent)) & missingPar);
-      newState->numMarkersSinceNonHetPar =
+      // (1 - newState->hetParent) is homozygous parent if not <isPI>
+      // we add <isPI> to get 0 if <isPI>:
+      newState->numMarkersSinceNonHetPar[1 - newState->hetParent + isPI] =
 			(1 - isPI) * homParMissing * (marker - firstMarker + 1);
       // PI states are heterozygous for both parents, so count is 1 when <isPI>
       // and zero otherwise (is a one het par marker in that case)
@@ -915,7 +922,7 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
   // For determining whether to trigger the two types of penalties:
   // Number of markers since the last one heterozygous for whichever parent is
   // homozygous here (for non-PI states)
-  int16_t numMarkersSinceNonHetPar = 0;
+  int16_t numMarkersSinceNonHetPar[2] = { 0, 0 };
   // Number of markers since the last one that is heterozygous for only one
   // parent
   int16_t numMarkersSinceOneHetPar = 0;
@@ -1078,7 +1085,7 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
 			  uint8_t isPI, uint8_t missingPar,
 			  int numMarkersSincePrev, uint64_t &allButOneIV,
 			  uint8_t &applyPenalty,
-			  int16_t &numMarkersSinceNonHetPar,
+			  int16_t numMarkersSinceNonHetPar[2],
 			  int16_t &numMarkersSinceOneHetPar,
 			  const uint64_t childrenData[5]) {
   // minimum count of number of parent haplotypes transmitted: 1 or 2.
@@ -1126,7 +1133,8 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
       // so we're being somewhat liberal here, but this is not likely to yield
       // a penalty in non-oneHapTrans scenarios.
       uint64_t parHaps[2] = { parHap, oppParHap };
-      uint8_t numTrans[2] = { popcount(parHap), popcount(oppParHap) };
+      uint8_t numTrans[2] = { (uint8_t) popcount(parHap),
+			      (uint8_t) popcount(oppParHap) };
       // which pattern (parHap or oppParHap) has min number of 1s (popcount)?
       int minPat = (numTrans[0] <= numTrans[1]) ? 0 : 1;
 
@@ -1138,112 +1146,62 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
       }
     }
 
-    if (!minHapTrans)
-      // if this is the case for both parents, want
-      // <numMarkersSinceNonHetPar> == 0 (which it is in the caller)
+    if (!minHapTrans) {
+      // Marker is not potential one hap trans region
+      // To be robust to errors that would reset the accumulation of many OHT
+      // looking markers, we don't reset this to 0 but subtract 50 markers from
+      // it.
+      numMarkersSinceNonHetPar[p] = max(0,
+	    prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev - 50);
       continue;
+    }
 
-    // should we accumulate markers in <numMarkersSinceNonHetPar>?
-    bool accumNumSinceNonHet = curPartial.hetParent < 2;
-    // Typically, if <curPartial.hetParent> == 2, numMarkersSinceNonHetPar
-    // should be 0. This is the value assigned in the caller.
-    // However, if there's a one hap trans IV *and* the child that received
-    // the outlier haplotype is missing, the marker is trivially ambiguous
-    // for which parent is heterozygous, and we should not reset
-    // <numMarkersSinceNonHetPar>
-    if (!accumNumSinceNonHet && (childrenData[G_MISS] & maybeAllButOneIV))
-      accumNumSinceNonHet = true;
+    // In potential one hap trans region
+    // Step 1: decide on whether to assign a penalty
+    // NOTE: penalty applies regardless of the heterozygosity of <curPartial>
+    //       because the markers between this one and the previous have
+    //       already been encountered. We may still reduce
+    //       <numMarkersSinceNonHetPar[p]> for the state being
+    //       formed, but the penalty applies due to past markers
 
-
-    if (prevState->numMarkersSinceNonHetPar < 0) {
-      // so that we know which children probably (silently) recombined
+    if (prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev >
+			      CmdLineOpts::oneHapTransThreshold * minHapTrans) {
+      // above threshold => apply penalty:
       allButOneIV = maybeAllButOneIV;
+      applyPenalty = 1;
+    }
 
-      // have already applied the penalty previously; have there been enough
-      // markers to apply a second penalty?
-      if (prevState->numMarkersSinceNonHetPar - numMarkersSincePrev <
-			    -CmdLineOpts::oneHapTransThreshold * minHapTrans &&
-	  prevState->numMarkersSinceNonHetPar >=
-			    -CmdLineOpts::oneHapTransThreshold * minHapTrans) {
-	// NOTE: applying this regardless of <accumNumSinceNonHet> because
-	//       those markers have already been encountered. We may still
-	//       reset <numMarkersSinceNonHetPar> for the state being formed,
-	//       but the penalty applies due to past markers
-	// Has been 2x threshold distance: apply another penalty (which should
-	// force a recombination)
-	applyPenalty = 1;
-      }
+    // Step 2: decide what the value of <numMarkersSinceNonHetPar[p]> should be
 
-      // now decide what value of <numMarkersSinceNonHetPar> should be assigned
-      // to the newly created state:
-      if (accumNumSinceNonHet) {
-	if (curPartial.hetParent == prevState->hetParent ||
-	    ((prevState->ambigParHet >> curPartial.hetParent) & 1) == 1 ||
-	    // Note: hetParent == 2 is a corner case: can only get here if
-	    // the child that inherited the outlier haplotype is missing data,
-	    // and we'll just act as if the site has the same heterozygous
-	    // status as the last site (see where <accumNumSinceNonHet> is
-	    // assigned above)
-	    curPartial.hetParent == 2) {
-	  // same parent is heterozygous: continue accumulating number of
-	  // markers
-	  numMarkersSinceNonHetPar = prevState->numMarkersSinceNonHetPar -
+    if (1 - p == curPartial.hetParent ||
+	(curPartial.hetParent == 2 &&
+				  (childrenData[G_MISS] & maybeAllButOneIV))) {
+      // heterozygous for other parent
+      // If <curPartial.hetParent> == 2, we would normally think of the site
+      // as heterozygous for this parent and execute the other branch.
+      // However, if there's a one hap trans IV *and* the child that received
+      // the outlier haplotype is missing, the marker is trivially ambiguous
+      // for which parent is heterozygous, and we should not reduce
+      // <numMarkersSinceNonHetPar[p]>
+      if (applyPenalty)
+	// same parent is heterozygous and penalty applied: continue
+	// accumulating number of markers and make count negative
+	numMarkersSinceNonHetPar[p] =
+	      prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev -
+			      CmdLineOpts::oneHapTransThreshold * minHapTrans;
+      else
+	// same parent is heterozygous: continue accumulating number of
+	// markers
+	numMarkersSinceNonHetPar[p] = prevState->numMarkersSinceNonHetPar[p] +
 							    numMarkersSincePrev;
-	}
-	else if (curPartial.hetParent & missingPar) {
-	  // one parent is heterozygous, but different than the previous state;
-	  // reset the count:
-	  // Note: this means that we count the states between the new one and
-	  // <prevState> for both parents. Seems appropriate: neither was
-	  // heterozygous over that interval
-	  numMarkersSinceNonHetPar = numMarkersSincePrev;
-	}
-      }
-      // else: numMarkersSinceNonHetPar == 0 (assigned in caller)
     }
     else {
-      if (prevState->numMarkersSinceNonHetPar + numMarkersSincePrev >
-			      CmdLineOpts::oneHapTransThreshold * minHapTrans) {
-	// above threshold => apply penalty:
-	// NOTE: applying this regardless of <accumNumSinceNonHet> because
-	//       those markers have already been encountered. We may still
-	//       reset <numMarkersSinceNonHetPar> for the state being formed,
-	//       but the penalty applies due to past markers
-	allButOneIV = maybeAllButOneIV;
-	applyPenalty = 1;
-      }
-
-      if (accumNumSinceNonHet) {
-	if (curPartial.hetParent == prevState->hetParent ||
-	    ((prevState->ambigParHet >> curPartial.hetParent) & 1) == 1 ||
-	    // Note: hetParent == 2 is a corner case: can only get here if
-	    // the child that inherited the outlier haplotype is missing data,
-	    // and we'll just act as if the site has the same heterozygous
-	    // status as the last site (see where <accumNumSinceNonHet> is
-	    // assigned above)
-	    curPartial.hetParent == 2) {
-	  if (applyPenalty)
-	    // same parent is heterozygous and penalty applied: continue
-	    // accumulating number of markers and make count negative
-	    numMarkersSinceNonHetPar =
-	      -(prevState->numMarkersSinceNonHetPar + numMarkersSincePrev -
-			      CmdLineOpts::oneHapTransThreshold * minHapTrans);
-	  else
-	    // same parent is heterozygous: continue accumulating number of
-	    // markers
-	    numMarkersSinceNonHetPar = prevState->numMarkersSinceNonHetPar +
-							    numMarkersSincePrev;
-	}
-	else if (curPartial.hetParent & missingPar) {
-	  // one parent is heterozygous, but different than the previous state;
-	  // reset the count:
-	  // Note: this means that we count the states between the new one and
-	  // <prevState> for both parents. Seems appropriate: neither was
-	  // heterozygous over that interval
-	  numMarkersSinceNonHetPar = numMarkersSincePrev;
-	}
-      }
-      // else: numMarkersSinceNonHetPar == 0 (assigned in caller)
+      // site is heterozygous for <p>
+      // could set <numMarkersSinceNonHetPar[p]> to 0, but one marker (or a
+      // small number) shouldn't be allowed to reset this fully
+      // instead reduce by 50 markers
+      numMarkersSinceNonHetPar[p] = max(0,
+	    prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev - 50);
     }
   }
 
@@ -1565,7 +1523,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint32_t prevIndex, uint8_t IVambigPar,
 			  float minMaxRec[2], bool hetParentUndefined,
 			  const uint64_t childrenData[5], int numDataChildren,
-			  int16_t numMarkersSinceNonHetPar,
+			  int16_t numMarkersSinceNonHetPar[2],
 			  int16_t numMarkersSinceOneHetPar,
 			  bool &zeroRecombsThisPrev) {
   // How many iterations of the loop? See various comments below.
@@ -1595,9 +1553,6 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // Is it possible to swap the phase of this state and obtain the same
   // number of recombinations from the previous state? Decided below
   uint8_t ambigLocal = 0;
-
-  assert(allButOneIV == 0 ||
-	 (prevState->numMarkersSinceNonHetPar < 0 || applyPenalty));
 
   // For cases where a missing data parent transmitted only a single haplotype:
   // (which is only detectable by examining the number of states where that
@@ -2099,7 +2054,7 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
 			    uint8_t altPhaseType, uint8_t ambigLocal,
 			    uint8_t prevHMMIndex, uint32_t prevIndex,
 			    uint8_t IVambigPar, float minMaxRec[2],
-			    int16_t numMarkersSinceNonHetPar,
+			    int16_t numMarkersSinceNonHetPar[2],
 			    int16_t numMarkersSinceOneHetPar,
 			    float totalRecombs, float totalLikehood,
 			    size_t numRecombs, int lowOrderChildBit) {
@@ -2135,7 +2090,8 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
     }
     theState->ambigPrev = 0;
     theState->minRecomb = totalRecombs;
-    theState->numMarkersSinceNonHetPar = numMarkersSinceNonHetPar;
+    theState->numMarkersSinceNonHetPar[0] = numMarkersSinceNonHetPar[0];
+    theState->numMarkersSinceNonHetPar[1] = numMarkersSinceNonHetPar[1];
     theState->numMarkersSinceOneHetPar = numMarkersSinceOneHetPar;
     theState->maxLikelihood = totalLikehood;
     theState->maxPrevRecomb = numRecombs;
@@ -2196,8 +2152,14 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
       theState->homParentGeno = homParentGeno;
     assert(hetParent == 2 || theState->homParentGeno == homParentGeno);
 
-    theState->numMarkersSinceNonHetPar =
-	      min(theState->numMarkersSinceNonHetPar, numMarkersSinceNonHetPar);
+    // Update <numMarkersSinceNonHetPar>:
+    for(uint8_t p = 0; p < 2; p++) {
+      // Have two values for <numMarkersSinceNonHetPar[p]>, the one in the state
+      // and the one for the new path
+      // Will be conservative and use the value closer to 0
+      theState->numMarkersSinceNonHetPar[p] =
+	min(theState->numMarkersSinceNonHetPar[p], numMarkersSinceNonHetPar[p]);
+    }
     theState->numMarkersSinceOneHetPar =
 	      min(theState->numMarkersSinceOneHetPar, numMarkersSinceOneHetPar);
 
@@ -2604,16 +2566,23 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
     // case.
     uint64_t ivFlippable = 0;
 
+    // Decide whether to assign one hap trans:
+    int16_t *numSinceNonHet =
+			  _hmm[hmmIndex][curStateIdx]->numMarkersSinceNonHetPar;
     if (!assignOneHapTrans &&
-	_hmm[hmmIndex][curStateIdx]->numMarkersSinceNonHetPar > 0 &&
+	(numSinceNonHet[0] > 0 || numSinceNonHet[1] > 0) &&
 	(hmmIndex == lastIndex || // always assign one hap trans at end ...
 	 // ... and beginning of a chromosome
-	 _hmm[hmmIndex][curStateIdx]->numMarkersSinceNonHetPar ==
-				_hmmMarker[hmmIndex] - chrFirstMarker + 1)) {
-      uint8_t hetParent = _hmm[hmmIndex][curStateIdx]->hetParent;
+	(numSinceNonHet[0] == _hmmMarker[hmmIndex] - chrFirstMarker + 1 ||
+	 numSinceNonHet[1] == _hmmMarker[hmmIndex] - chrFirstMarker + 1))) {
+      // Determine which parent has one hap trans region: one with longer
+      // stretch
+      uint8_t homParent = 0;
+      if (numSinceNonHet[1] > numSinceNonHet[0])
+	homParent = 1;
+      uint8_t hetParent = 1 - homParent;
 
       // detect which haplotype was transmitted:
-      uint8_t homParent = 1 - hetParent;
       uint64_t parHap =_hmm[hmmIndex][curStateIdx]->iv & _parBits[homParent];
       uint64_t oppParHap = parHap ^ _parBits[homParent];
 
@@ -2634,11 +2603,12 @@ void Phaser::backtrace(NuclearFamily *theFam, uint8_t missingPar,
     }
 
     if (assignOneHapTrans) {
+      uint8_t homParent = 1 - oneHapTransHetParent;
       uint8_t hetParent = _hmm[hmmIndex][curStateIdx]->hetParent;
 
       // has it ended?
-      if (_hmm[hmmIndex][curStateIdx]->numMarkersSinceNonHetPar <= 0 ||
-	  oneHapTransHetParent != hetParent)
+      if (_hmm[hmmIndex][curStateIdx]->numMarkersSinceNonHetPar[homParent] <= 0
+	  || oneHapTransHetParent != hetParent)
 	assignOneHapTrans = false;
       else {
 	// can do this by (1) setting <ivFlippable> for the child that has the
@@ -3203,9 +3173,10 @@ void Phaser::tracePrior(int hmmIndex, int stateIdx) {
 
   do {
     State *state = _hmm[ hmmIndex ][ stateIdx ];
-    printf("iv = %ld, ambig = %ld, unassigned = %ld, minRecomb = %.1f, numSinceNonHet = %d\n",
+    printf("iv = %ld, ambig = %ld, unassigned = %ld, minRecomb = %.1f, numSinceNonHet = %d,%d\n",
 	   state->iv, state->ambig, state->unassigned, state->minRecomb,
-	   state->numMarkersSinceNonHetPar);
+	   state->numMarkersSinceNonHetPar[0],
+	   state->numMarkersSinceNonHetPar[1]);
     printf("  hmmIndex = %d, state = %d  (marker = %d)\n",
 	   hmmIndex, stateIdx, _hmmMarker[hmmIndex]);
 
@@ -3252,9 +3223,10 @@ void Phaser::printStates(int hmmIndex) {
   for(int idx = 0; idx < numStates; idx++) {
     State *state = _hmm[ hmmIndex ][ idx ];
 
-    printf("iv = %ld, ambig = %ld, unassigned = %ld, minRecomb = %.1f, numSinceNonHet = %d\n",
+    printf("iv = %ld, ambig = %ld, unassigned = %ld, minRecomb = %.1f, numSinceNonHet = %d,%d\n",
 	   state->iv, state->ambig, state->unassigned, state->minRecomb,
-	   state->numMarkersSinceNonHetPar);
+	   state->numMarkersSinceNonHetPar[0],
+	   state->numMarkersSinceNonHetPar[1]);
     printf("  hmmIndex = %d, state = %d  (marker = %d)\n",
 	   hmmIndex, idx, _hmmMarker[hmmIndex]);
 
