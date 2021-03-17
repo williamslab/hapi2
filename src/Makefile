@@ -7,7 +7,7 @@ GPP = g++
 GCC = gcc
 DEFINES= 
 CFLAGS = -Wall $(DEFINES)
-CPPFLAGS = -std=c++11 $(CFLAGS)
+CPPFLAGS = -std=c++2a $(CFLAGS)
 ifdef DEBUG           # to use run `make DEBUG=1`
   CFLAGS += -g
 else

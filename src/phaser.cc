@@ -3,11 +3,12 @@
 // This program is distributed under the terms of the GNU General Public License
 
 #include <string.h>
-#include <bitset>
-#include <genetio/util.h>
+#include <bit>
 #include <float.h>
 #include "phaser.h"
 #include "cmdlineopts.h"
+
+using namespace std;
 
 ////////////////////////////////////////////////////////////////////////////////
 // declare/initialize static members
