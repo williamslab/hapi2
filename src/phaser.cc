@@ -1147,16 +1147,25 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
     }
 
     if (!minHapTrans) {
-      // Marker is not potential one hap trans region
-      // To be robust to errors that would reset the accumulation of many OHT
-      // looking markers, we don't reset this to 0 but subtract 50 markers from
-      // it.
-      numMarkersSinceNonHetPar[p] = max(0,
-	    prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev - 50);
+      // Marker does not look like it's from a one hap trans region
+      // To be robust to errors within OHT regions, don't reset
+      // <numMarkersSinceNonHetPar[p]> to 0. Instead subtract 50 markers from
+      // it. (Thus many such markers in a row will take us out of a OHT region)
+
+      // We get the sign below to compute the absolute value of
+      // <numMarkersSinceNonHetPar>, do the subtraction of 50 markers (and
+      // addition of the number of markers *before* this one) and then multiply
+      // by the sign again so that the final value of <numMarkersSinceNonHetPar>
+      // has the same sign as before (or is 0).
+      int8_t sign = -(prevState->numMarkersSinceNonHetPar[p] < 0) ? -1 : 1;
+      int16_t newAbsNum = max(0,
+	  sign * prevState->numMarkersSinceNonHetPar[p] + // abs(num)
+						      numMarkersSincePrev - 50);
+      numMarkersSinceNonHetPar[p] = sign * newAbsNum;
       continue;
     }
 
-    // In potential one hap trans region
+    // In a potential one hap trans region
     // Step 1: decide on whether to assign a penalty
     // NOTE: penalty applies regardless of the heterozygosity of <curPartial>
     //       because the markers between this one and the previous have
@@ -1164,11 +1173,46 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
     //       <numMarkersSinceNonHetPar[p]> for the state being
     //       formed, but the penalty applies due to past markers
 
-    if (prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev >
+    // Want to know whether we've already applied a penalty or not: negative
+    // <numMarkersSinceNonHetPar> means it *has* been applied.
+    // We use <sign> to decide on any new/further penalties and to ensure
+    // that the final value of <numMarkersSinceNonHetPar> either remains
+    // negative, positively accumulates markers, or -- if we're applying a
+    // penalty for the first time -- becomes negative.
+    int8_t sign;
+    if (prevState->numMarkersSinceNonHetPar[p] < 0) {
+      sign = -1;
+
+      // have already applied the penalty previously; have there been enough
+      // markers to apply a second penalty?
+      int numPastPenalties = prevState->numMarkersSinceNonHetPar[p] /
+			    (-CmdLineOpts::oneHapTransThreshold * minHapTrans);
+      int numCurPenalties =
+	      (prevState->numMarkersSinceNonHetPar[p] - numMarkersSincePrev) /
+			    (-CmdLineOpts::oneHapTransThreshold * minHapTrans);
+      if (numCurPenalties > numPastPenalties) {
+	// Has been another multiple times the threshold distance: apply
+	// another penalty (second should force a recombination)
+	allButOneIV = maybeAllButOneIV;
+	applyPenalty = 1;
+      }
+      else if (numPastPenalties <= 1)
+	// so that we know which children probably (silently) recombined
+	// used inside updateStates() to *reverse* a past penalty. The reversal
+	// is to avoid preferring paths that introduce non-optimal
+	// recombinations in lieu of allowing the outlier child (or two
+	// children) to recombine.
+	allButOneIV = maybeAllButOneIV;
+    }
+    else {
+      sign = 1;
+
+      if (prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev >
 			      CmdLineOpts::oneHapTransThreshold * minHapTrans) {
-      // above threshold => apply penalty:
-      allButOneIV = maybeAllButOneIV;
-      applyPenalty = 1;
+	// above threshold => apply penalty:
+	allButOneIV = maybeAllButOneIV;
+	applyPenalty = 1;
+      }
     }
 
     // Step 2: decide what the value of <numMarkersSinceNonHetPar[p]> should be
@@ -1183,25 +1227,38 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
       // the outlier haplotype is missing, the marker is trivially ambiguous
       // for which parent is heterozygous, and we should not reduce
       // <numMarkersSinceNonHetPar[p]>
-      if (applyPenalty)
+      if (sign > 0 && applyPenalty) { // sign > 0 => no previous penalty applied
 	// same parent is heterozygous and penalty applied: continue
 	// accumulating number of markers and make count negative
 	numMarkersSinceNonHetPar[p] =
-	      prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev -
-			      CmdLineOpts::oneHapTransThreshold * minHapTrans;
+	      -(prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev -
+			      CmdLineOpts::oneHapTransThreshold * minHapTrans);
+      }
       else
 	// same parent is heterozygous: continue accumulating number of
 	// markers
-	numMarkersSinceNonHetPar[p] = prevState->numMarkersSinceNonHetPar[p] +
+	// here we subtract <numMarkersSincePrev> to continue accumulating
+	// (more negative number)
+	numMarkersSinceNonHetPar[p] = prevState->numMarkersSinceNonHetPar[p] -
 							    numMarkersSincePrev;
     }
     else {
-      // site is heterozygous for <p>
-      // could set <numMarkersSinceNonHetPar[p]> to 0, but one marker (or a
-      // small number) shouldn't be allowed to reset this fully
-      // instead reduce by 50 markers
-      numMarkersSinceNonHetPar[p] = max(0,
-	    prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev - 50);
+      // site is heterozygous for <p> -- same case as above when (!minHapTrans):
+
+      // Marker does not look like it's from a one hap trans region
+      // To be robust to errors within OHT regions, don't reset
+      // <numMarkersSinceNonHetPar[p]> to 0. Instead subtract 50 markers from
+      // it. (Thus many such markers in a row will take us out of a OHT region)
+
+      // We get the sign below to compute the absolute value of
+      // <numMarkersSinceNonHetPar>, do the subtraction of 50 markers (and
+      // addition of the number of markers *before* this one) and then multiply
+      // by the sign again so that the final value of <numMarkersSinceNonHetPar>
+      // has the same sign as before (or is 0).
+      int16_t newAbsNum = max(0,
+	  sign * prevState->numMarkersSinceNonHetPar[p] + // abs(num)
+						      numMarkersSincePrev - 50);
+      numMarkersSinceNonHetPar[p] = sign * newAbsNum;
     }
   }
 
@@ -1553,6 +1610,10 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // Is it possible to swap the phase of this state and obtain the same
   // number of recombinations from the previous state? Decided below
   uint8_t ambigLocal = 0;
+
+  assert(allButOneIV == 0 ||
+	 (prevState->numMarkersSinceNonHetPar[0] < 0 ||
+	  prevState->numMarkersSinceNonHetPar[1] < 0 || applyPenalty));
 
   // For cases where a missing data parent transmitted only a single haplotype:
   // (which is only detectable by examining the number of states where that
@@ -2064,6 +2125,9 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
 
   uint8_t isPI = hetParent >> 1;
 
+  // Returns -1 for the state defined by the arguments above being better
+  // than <theState>, 0 for them being equal (leading to an ambiguity), and
+  // 1 for <theState> being better
   int8_t whichOptimal = decideOptimalState(theState, prevState, prevHMMIndex,
 					   totalRecombs, totalLikehood,
 					   numRecombs);
@@ -2157,8 +2221,16 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
       // Have two values for <numMarkersSinceNonHetPar[p]>, the one in the state
       // and the one for the new path
       // Will be conservative and use the value closer to 0
-      theState->numMarkersSinceNonHetPar[p] =
-	min(theState->numMarkersSinceNonHetPar[p], numMarkersSinceNonHetPar[p]);
+      if (numMarkersSinceNonHetPar[p] == 0)
+	theState->numMarkersSinceNonHetPar[p] = 0;
+      else if (numMarkersSinceNonHetPar[p] > 0)
+	theState->numMarkersSinceNonHetPar[p] =
+	  min(theState->numMarkersSinceNonHetPar[p],
+						   numMarkersSinceNonHetPar[p]);
+      else
+	theState->numMarkersSinceNonHetPar[p] =
+	  max(theState->numMarkersSinceNonHetPar[p],
+						   numMarkersSinceNonHetPar[p]);
     }
     theState->numMarkersSinceOneHetPar =
 	      min(theState->numMarkersSinceOneHetPar, numMarkersSinceOneHetPar);
