@@ -113,8 +113,7 @@ class Phaser {
     //////////////////////////////////////////////////////////////////
 
     static void parBitsInit(int numChildren);
-    static void getFamilyData(NuclearFamily *theFam, uint8_t missingPar,
-			      int marker, uint8_t &parentData,
+    static void getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
 			      uint8_t &parentGenoTypes,
 			      uint64_t childrenData[5], uint8_t &childGenoTypes,
 			      int &numMissChildren);
@@ -131,22 +130,20 @@ class Phaser {
     static void makePartialPIStates(dynarray<State> &partialStates,
 				    uint8_t parentData,
 				    const uint64_t childrenData[5]);
-    static void makeFullStates(const dynarray<State> &partialStates, int marker,
+    static void makeFullStates(const dynarray<State> &partialStates,
 			       int firstMarker, const uint64_t childrenData[5],
-			       uint8_t missingPar, int numChildren,
-			       int numMissChildren);
-    static uint8_t isIVambigPar(const State *state, uint8_t missingPar);
+			       int numChildren, int numMissChildren);
+    static uint8_t isIVambigPar(const State *state);
     static void mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 			      uint32_t prevIdx, const State &curPartial,
 			      float minMaxRec[2],
 			      const uint64_t childrenData[5],
-			      uint8_t IVambigPar, uint8_t missingPar,
-			      int numDataChildren, int numMarkersSincePrev,
+			      uint8_t IVambigPar, int numDataChildren,
+			      int numMarkersSincePrev,
 			      bool &zeroRecombsThisPrev);
     static void checkPenalty(const State *prevState, const State &curPartial,
-			     uint8_t isPI, uint8_t missingPar,
-			     int numMarkersSincePrev, uint64_t &allButOneIV,
-			     uint8_t &applyPenalty,
+			     uint8_t isPI, int numMarkersSincePrev,
+			     uint64_t allButOneIV[2], uint8_t applyPenalty[2],
 			     int16_t numMarkersSinceNonHetPar[2],
 			     int16_t &numMarkersSinceOneHetPar,
 			     const uint64_t childrenData[5]);
@@ -174,8 +171,8 @@ class Phaser {
 				   uint64_t &ambig1Unassigned);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t ambig1Unassigned,
-			     uint64_t recombs, uint64_t allButOneIV,
-			     uint8_t applyPenalty,
+			     uint64_t recombs, uint64_t allButOneIV[2],
+			     uint8_t applyPenalty[2],
 			     const State *prevState, uint64_t stdAmbigOnlyPrev,
 			     uint64_t ambig1PrevInfo, uint8_t hetParent,
 			     uint8_t homParentGeno, uint8_t initParPhase,
@@ -215,8 +212,8 @@ class Phaser {
     static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 					  float minMaxRec[2],
 					  int numChildren);
-    static void backtrace(NuclearFamily *theFam, uint8_t missingPar,
-			  int chrFirstMarker, int chrLastMarker);
+    static void backtrace(NuclearFamily *theFam, int chrFirstMarker,
+			  int chrLastMarker);
     static uint32_t findMinStates(dynarray<State*> &theStates);
     static void deleteStates(dynarray<State*> &theStates);
     static void propagateBackIV(uint64_t curIV, uint64_t curAmbig,
@@ -335,6 +332,9 @@ class Phaser {
     // For tracking information about genetic distances
     static int _lastInformMarker;
     static int _curMarker;
+
+    // which parnets are missing? Bit vector with bit 0: dad, bit 1: mom
+    static uint8_t _missingPar;
 };
 
 struct State {
