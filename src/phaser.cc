@@ -1812,7 +1812,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // parent the same -- thus being a scenario with only one haplotype
   // transmitted by the parent.
   int nUpenaltyIters = 1;
-  if (unassignedPenalty)
+  if (unassignedPenalty[0] || unassignedPenalty[1])
     nUpenaltyIters = 2;
 
   State *lastState = NULL;
