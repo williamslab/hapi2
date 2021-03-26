@@ -1224,12 +1224,18 @@ void Phaser::checkPenalty(const State *prevState, const State &curPartial,
       // the outlier haplotype is missing, the marker is trivially ambiguous
       // for which parent is heterozygous, and we should not reduce
       // <numMarkersSinceNonHetPar[p]>
-      if (sign > 0 && applyPenalty[p]) { // sign > 0 => no penalty yet applied
-	// same parent is heterozygous and penalty applied: continue
-	// accumulating number of markers and make count negative
-	numMarkersSinceNonHetPar[p] =
+      if (sign > 0) { // sign > 0 => no penalty yet applied
+	if (applyPenalty[p])
+	  // same parent is heterozygous and penalty applied: continue
+	  // accumulating number of markers and make count negative
+	  numMarkersSinceNonHetPar[p] =
 	      -(prevState->numMarkersSinceNonHetPar[p] + numMarkersSincePrev -
 			      CmdLineOpts::oneHapTransThreshold * minHapTrans);
+	else
+	  // same parent is heterozygous: continue accumulating number of
+	  // markers
+	  numMarkersSinceNonHetPar[p] = prevState->numMarkersSinceNonHetPar[p] +
+							    numMarkersSincePrev;
       }
       else
 	// same parent is heterozygous: continue accumulating number of
