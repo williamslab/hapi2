@@ -133,7 +133,8 @@ class Phaser {
     static void makeFullStates(const dynarray<State> &partialStates,
 			       int firstMarker, const uint64_t childrenData[5],
 			       int numChildren, int numMissChildren);
-    static uint8_t isIVambigPar(const State *state);
+    static uint8_t isIVambigPar(uint64_t iv, uint64_t ambigIV,
+				uint64_t unassigned = 0);
     static void mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 			      uint32_t prevIdx, const State &curPartial,
 			      float minMaxRec[2],
@@ -141,7 +142,7 @@ class Phaser {
 			      uint8_t IVambigPar, int numDataChildren,
 			      int numMarkersSincePrev,
 			      bool &zeroRecombsThisPrev);
-    static void checkPenalty(const State *prevState, const State &curPartial,
+    static void checkPenalty(const State *prevState, uint8_t hetParent,
 			     uint8_t isPI, int numMarkersSincePrev,
 			     uint64_t allButOneIV[2], uint8_t applyPenalty[2],
 			     int16_t numMarkersSinceNonHetPar[2],
@@ -333,8 +334,9 @@ class Phaser {
     static int _lastInformMarker;
     static int _curMarker;
 
-    // which parnets are missing? Bit vector with bit 0: dad, bit 1: mom
+    // which parents are missing? Bit vector with bit 0: dad, bit 1: mom
     static uint8_t _missingPar;
+
 };
 
 struct State {
