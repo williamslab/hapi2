@@ -3016,10 +3016,10 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     // calculate IVflippable, etc.? In some sense that is what we're calculating
     // here: which IV values are potentially flippable and therefore shouldn't
     // factor into which parent's haplotypes were transmitted.
-    uint8_t hetParent = curState->hetParent;
-    uint8_t oneParHomozy = 1 - (hetParent >> 1);
+    uint8_t oneParHomozy = 1 - (curState->hetParent >> 1);
+    uint8_t homParent = oneParHomozy * (1 - curState->hetParent);
     uint64_t propagateMask = (missing * 3) |
-					  (oneParHomozy * _parBits[hetParent]);
+					  (oneParHomozy * _parBits[homParent]);
     if (lastIVSet)
       lastAssignedIV = (curState->iv & ~propagateMask) |
 					       (lastAssignedIV & propagateMask);
