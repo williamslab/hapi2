@@ -61,10 +61,11 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
   parBitsInit(numChildren);
 
   // assign bits to indicate which parents are missing; bit 0: dad, bit 1: mom
+  _missingPar = 0;
   if (!theFam->_parents->first->hasData())
-    _missingPar += 1;
+    _missingPar |= 1;
   if (!theFam->_parents->second->hasData())
-    _missingPar += 2;
+    _missingPar |= 2;
 
   // force parents to be missing according to command-line options:
   _missingPar |= CmdLineOpts::forceMissingPar;
