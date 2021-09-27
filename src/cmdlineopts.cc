@@ -42,7 +42,7 @@ int   CmdLineOpts::edgeCO = 0;
 int   CmdLineOpts::verbose = 0;
 int   CmdLineOpts::minNumParentsData = 0;
 int   CmdLineOpts::minNumChildrenData = 2;
-uint8_t CmdLineOpts::forceMissingPar = 0;
+uint8_t CmdLineOpts::forceMissingParBits = 0;
 
 // Parses the command line options for the program.
 bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
@@ -55,7 +55,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     EDGE_CO,
     MIN_PAR,
     MIN_CHILD,
-    MISS_PAR,
+    MISS_PAR_BITS,
   };
 
   static struct option const longopts[] =
@@ -88,7 +88,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"verbose", no_argument, &CmdLineOpts::verbose, 1},
     {"min_par", required_argument, NULL, MIN_PAR},
     {"min_child", required_argument, NULL, MIN_CHILD},
-    {"set_miss_par", required_argument, NULL, MISS_PAR},
+    {"set_miss_par_bits", required_argument, NULL, MISS_PAR_BITS},
     {0, 0, 0, 0}
   };
 
@@ -297,16 +297,16 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	  haveGoodArgs = false;
 	}
 	break;
-      case MISS_PAR:
-	forceMissingPar = strtol(optarg, &endptr, 10);
+      case MISS_PAR_BITS:
+	forceMissingParBits = strtol(optarg, &endptr, 10);
 	if (errno != 0 || *endptr != '\0') {
-	  fprintf(stderr, "ERROR: unable to parse set_miss_par option as integer\n");
+	  fprintf(stderr, "ERROR: unable to parse set_miss_par_bits option as integer\n");
 	  if (errno != 0)
 	    perror("strtol");
 	  exit(2);
 	}
-	if (forceMissingPar < 0 || forceMissingPar > 3) {
-	  fprintf(stderr, "ERROR: set_miss_par option must be between 0 and 3\n");
+	if (forceMissingParBits < 0 || forceMissingParBits > 3) {
+	  fprintf(stderr, "ERROR: set_miss_par_bits option must be between 0 and 3\n");
 	  haveGoodArgs = false;
 	}
 	break;

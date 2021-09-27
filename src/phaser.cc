@@ -68,7 +68,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
     _missingPar |= 2;
 
   // force parents to be missing according to command-line options:
-  _missingPar |= CmdLineOpts::forceMissingPar;
+  _missingPar |= CmdLineOpts::forceMissingParBits;
 
   dynarray<State> partialStates;
   _lastInformMarker = -1;

@@ -7,8 +7,8 @@
 #ifndef CMDLINEOPTS_H
 #define CMDLINEOPTS_H
 
-#define VERSION_NUMBER	"1.92.1"
-#define RELEASE_DATE    " 5 Jul 2021"
+#define VERSION_NUMBER	"1.94.1"
+#define RELEASE_DATE    "27 Sep 2021"
 
 class CmdLineOpts {
   public:
@@ -122,7 +122,7 @@ class CmdLineOpts {
     // 1: dad missing
     // 2: mom missing
     // 3: both dad and mom missing
-    static uint8_t forceMissingPar;
+    static uint8_t forceMissingParBits;
 };
 
 #endif // CMDOPTIONS_H

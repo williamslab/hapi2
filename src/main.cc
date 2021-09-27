@@ -99,9 +99,9 @@ int main(int argc, char **argv) {
       fprintf(out, "\n");
     }
 
-    if (CmdLineOpts::forceMissingPar) {
+    if (CmdLineOpts::forceMissingParBits) {
       fprintf(out, "Omitting parent data for:\t\t\t");
-      switch (CmdLineOpts::forceMissingPar) {
+      switch (CmdLineOpts::forceMissingParBits) {
 	case 1:
 	  fprintf(out, "dad\n\n");
 	  break;
@@ -112,7 +112,8 @@ int main(int argc, char **argv) {
 	  fprintf(out, "both parents\n\n");
 	  break;
 	default:
-	  fprintf(out, "ERROR: value of %d\n\n", CmdLineOpts::forceMissingPar);
+	  fprintf(out, "ERROR: value of %d\n\n",
+		  CmdLineOpts::forceMissingParBits);
 	  exit(1);
 	  break;
       }
