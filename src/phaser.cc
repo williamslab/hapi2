@@ -822,8 +822,8 @@ void Phaser::printMarkerType(int mt, FILE *log) {
 }
 
 // Given the marker types <markerTypes> that are consistent with the family
-// data, generates partial states indicating, where known, which allele
-// each parent transmitted to the children.
+// data at the current marker, generates partial states indicating, where
+// known, which allele each parent transmitted to the children.
 void Phaser::makePartialStates(dynarray<State> &partialStates,
 			       int markerTypes, uint8_t parentData,
 			       uint8_t homParGeno,
@@ -835,11 +835,33 @@ void Phaser::makePartialStates(dynarray<State> &partialStates,
 
   // Fully informative for one parent:
   if (markerTypes & (1 << MT_FI_1)) {
-    makePartialFI1States(partialStates, parentData, homParGeno, childrenData);
+    if (homParGeno == G_MISS) {
+      assert(_onChrX); // should only happen on X:
+      // do we have any daughters? and are any non-missing? if so we can try
+      // both possibilities for dad's genotype
+      if (_childSexes[1] > 0 &&
+		    (childrenData[G_MISS] & _childSexes[1]) != _childSexes[1]) {
+	// try both possibilities for dad's (homozygous) genotype
+	makePartialFI1States(partialStates, parentData, /*homParGeno=*/ G_HOM0,
+			     childrenData);
+	makePartialFI1States(partialStates, parentData, /*homParGeno=*/ G_HOM1,
+			     childrenData);
+      }
+      else {
+	// no information to impute dad; use a placeholder genotype for him to
+	// get the partial state made and then set his genotype to missing
+	makePartialFI1States(partialStates, parentData, /*homParGeno=*/ G_HOM0,
+			     childrenData);
+	partialStates[ partialStates.length() - 1 ].homParentGeno = G_MISS;
+      }
+    }
+    else
+      makePartialFI1States(partialStates, parentData, homParGeno, childrenData);
   }
 
   // Partly informative
   if (markerTypes & (1 << MT_PI)) {
+    assert( !_onChrX );
     makePartialPIStates(partialStates, parentData, childrenData);
   }
 }
@@ -850,11 +872,49 @@ void Phaser::makePartialStates(dynarray<State> &partialStates,
 void Phaser::makePartialFI1States(dynarray<State> &partialStates,
 				  uint8_t parentData, uint8_t homParGeno,
 				  const uint64_t childrenData[5]) {
+  // which children are heterozygous or hom1 at this marker? store these.
+  // this allows us to modify these values so that the autosomal code works
+  // on chrX
+  uint64_t childHetHom1[2] = { childrenData[ G_HET ], childrenData[ G_HOM1 ] };
+
+  // First deal with chrX nuances:
+  if (_onChrX) {
+    // Use a hack to get the below autosomal code to work for the X chromosome
+    // by making the sons diploid. This works by setting their genotypes such
+    // that they carry their dad's allele -- i.e., making sons that are
+    // homozygous for the opposite allele as dad heterozygous. (Sons that are
+    // homozygous for the same allele as dad need not be changed: they'd
+    // continue to have the same homozygous genotype if they were diploid.)
+    // Start by getting those sons' bits:
+    uint8_t oppDadHomType = (homParGeno == G_HOM0) ? G_HOM1 : G_HOM0;
+    uint64_t maleChildHomOppDad =
+				childrenData[ oppDadHomType ] & _childSexes[0];
+    // now we want to clear these sons' bits in their original homozygous
+    // genotype; to avoid a conditional we make this a bit complex; our goal is
+    //   childrenData[ oppDadHomType ] ^= maleChildHomOppDad;
+    // but we don't want to change childrenData. First get an indicator of
+    // whether oppDadHomType is G_HOM1 by getting its first bit:
+    uint8_t oppDadIsHom1 = oppDadHomType & 1;
+    // now we'll flip, and this will either flip the G_HOM1 value OR the G_HET
+    // value. In the latter case, we're setting these sons as heterozygous,
+    // since their bits in the G_HET vector will start as 0. Setting these sons
+    // bits in the G_HET vector to 1 is something we want to do regardless, so
+    // it won't hurt:
+    childHetHom1[ oppDadIsHom1 ] ^= maleChildHomOppDad;
+    // now, regardless of what happened above, we ensure that these sons bits
+    // are set in the G_HET vector:
+    childHetHom1[0] |= maleChildHomOppDad;
+  }
+
   uint8_t startPar, endPar;
 
+  // For chrX, only Mom is heterozygous
+  if (_onChrX) {
+    startPar = endPar = 1;
+  }
   // If both parents are missing, we'll make states corresponding to each
   // being heterozygous (other homozygous), consistent with the ambiguity
-  if (parentData == (G_MISS << 2) + (G_MISS)) {
+  else if (parentData == (G_MISS << 2) + (G_MISS)) {
     startPar = 0;
     endPar = 1;
   }
@@ -881,7 +941,7 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     partialStates.addEmpty();
     State &newState = partialStates[newIndex];
 
-    // Initially assumes the phase is assigned such that allele 0 is on
+    // Initially assumes the parent phase is assigned such that allele 0 is on
     // haplotype 0 and allele 1 is on haplotype 1. When the homozygous parent
     // is homozygous for allele 0, the heterozygous children will have received
     // haplotype 1 from the heterozygous parent. However, if the homozygous
@@ -893,16 +953,23 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     // Following always holds; commented out to improve efficiency:
 //    assert(homParGeno == G_HOM0 || homParGeno == G_HOM1);
     uint8_t homParAll1 = homParGeno & 1; // binary: homozy parent have allele 1?
-    // Which genotype in the children received allele 1 from het parent?
-    uint8_t childAll1Geno = homParAll1 * G_HOM1 + (1 - homParAll1) * G_HET;
-    newState.iv = _parBits[hetPar] & childrenData[ childAll1Geno ];
+    // either gets the children that are G_HOM1 or those that are G_HET:
+    newState.iv = _parBits[hetPar] & childHetHom1[ homParAll1 ];
     // No ambiguous bits (though a missing data child could have ambiguous bits
     // propagated from a previous marker, but that happens during full state
     // construction)
     newState.ambig = 0;
     // No information about transmission from homozygous parent and for
     // children that are missing data:
-    newState.unassigned = _parBits[homPar] | childrenData[ G_MISS ];
+    // one exception on the homozygous parent being unassigned: if we're on the
+    // X chromosome, we say that the father's bits are all assigned to
+    // non-missing children
+    newState.unassigned = ( (1-_onChrX) * _parBits[homPar] ) |
+							childrenData[ G_MISS ];
+    // on the X chromosome, females' paternal IV values is 0 and males are 1;
+    // we use the latter when printing the (hemizygous) males
+    newState.iv |= (_onChrX * ( _childSexes[0] & _parBits[0] )) &
+							~childrenData[ G_MISS ];
     newState.hetParent = hetPar;
     newState.homParentGeno = homParGeno;
     // Won't assign <parentPhase> field as all partial states have a value of
