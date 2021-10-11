@@ -22,61 +22,33 @@ Phaser::BT_state_set            *Phaser::_curBTAmbigSet;
 Phaser::BT_state_set            *Phaser::_prevBTAmbigSet;
 PhaseMethod                     Phaser::_phaseMethod;
 uint64_t Phaser::_parBits[3];
+uint64_t Phaser::_childSexes[2];
 uint64_t Phaser::_flips[4];
 uint64_t Phaser::_ambigFlips[4];
 int      Phaser::_lastInformMarker;
 int      Phaser::_curMarker;
+bool     Phaser::_onChrX;
 uint8_t  Phaser::_missingPar;
 
 extern uint8_t swap01Phase[4][16];
 extern uint8_t swap2Phase[4][16];
 
 void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
-  // TODO! remove this and make it a command line option
-  _phaseMethod = PHASE_MINREC;
+  _onChrX = Marker::isChromX(chrIdx);
+  _phaseMethod = PHASE_MINREC; // TODO! remove this and make command line option
 
-  // Get first and last marker numbers for the chromosome to be phased:
+  // Ready storage containers/various state to analyze this chromosome
+  initPhaseState(theFam);
+
+  dynarray<State> partialStates;
   int firstMarker = Marker::getFirstMarkerNum(chrIdx);
   int lastMarker = Marker::getLastMarkerNum(chrIdx);
 
-  int numChildren = theFam->numChildren();
-  if (numChildren > 32) {
-    fflush(stdout);
-    fprintf(stderr, "\n");
-    fprintf(stderr, "ERROR: cannot phase more than 32 children in a family.\n");
-    fprintf(stderr, "       changing to >64 bits for inheritance vectors would fix this\n");
-    exit(9);
-  }
-
-
-  // Ready storage containers to analyze this chromosome
-  _hmm.clear();
-  _hmmMarker.clear();
-  _prevErrorStates.clear();
-  _genos.clear();
-  for(int i = 0; i < _ambigPrevLists.length(); i++) {
-    _ambigPrevLists[i].clear();
-  }
-  _ambigPrevLists.clear();
-  parBitsInit(numChildren);
-
-  // assign bits to indicate which parents are missing; bit 0: dad, bit 1: mom
-  _missingPar = 0;
-  if (!theFam->_parents->first->hasData())
-    _missingPar |= 1;
-  if (!theFam->_parents->second->hasData())
-    _missingPar |= 2;
-
-  // force parents to be missing according to command-line options:
-  _missingPar |= CmdLineOpts::forceMissingParBits;
-
-  dynarray<State> partialStates;
-  _lastInformMarker = -1;
-
-  // build states/phase each marker
+  // PHASE! Build states/calculate corresponding scores for each marker
   for(_curMarker = firstMarker; _curMarker <= lastMarker; _curMarker++) {
     uint8_t parentData, parentGenoTypes, homParGeno, childGenoTypes;
-    // Each index corresponds to a genotype (see the Geno enumerated type).
+    // Each index in <childrenData> corresponds to a genotype (see the Geno
+    // enumerated type).
     // The two bits corresponding to each child are set to 1 for the index
     // of its genotype.
     // Index 4 (the last value) stores the raw genotype data in PLINK format
@@ -90,7 +62,14 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 1: Determine marker type and check for Mendelian errors
-    int mt = getMarkerType(parentGenoTypes, childGenoTypes, homParGeno);
+    // TODO: refactor / update comment
+    int mt;
+    bool specialXMT = false; // see getMarkerTypeX() code for this special type
+    if (!_onChrX) // autosomal?
+      mt = getMarkerType(parentGenoTypes, childGenoTypes, homParGeno);
+    else // X
+      mt = getMarkerTypeX(childGenoTypes, parentData, childrenData, homParGeno,
+			  specialXMT);
     assert(mt > 0 && (mt & ~((1 << MT_N_TYPES) -1) ) == 0);
 
     if (CmdLineOpts::verbose)
@@ -112,6 +91,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
       continue;
     }
 
+    // TODO: handle X chromosome
     if (mt & (1 << MT_UN)) {
       uint8_t swapHetChildren = 0;
       if ((parentData & 3) == G_HOM1 || ((parentData >> 2) & 3) == G_HOM0)
@@ -139,8 +119,8 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
     // Simultaneously calculate the minimum recombination counts for each state
     // and identify which previous state(s) produce that minimum count (i.e.,
     // perform count-based Viterbi calculation)
-    makeFullStates(partialStates, firstMarker, childrenData, numChildren,
-		   numMissChildren);
+    makeFullStates(partialStates, firstMarker, childrenData,
+		   theFam->numChildren(), numMissChildren);
 
     // Clean up for next marker
     partialStates.clear();
@@ -165,7 +145,39 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
 }
 
 // Do initial setup of values used throughout phasing the current chromosome
-void Phaser::parBitsInit(int numChildren) {
+// if on the X chromosome, assign <_childSexes>
+void Phaser::initPhaseState(NuclearFamily *theFam) {
+  int numChildren = theFam->numChildren();
+  if (numChildren > 32) {
+    fflush(stdout);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "ERROR: cannot phase more than 32 children in a family.\n");
+    fprintf(stderr, "       changing to >64 bits for inheritance vectors would fix this\n");
+    exit(9);
+  }
+
+  _hmm.clear();
+  _hmmMarker.clear();
+  _prevErrorStates.clear();
+  _genos.clear();
+  for(int i = 0; i < _ambigPrevLists.length(); i++) {
+    _ambigPrevLists[i].clear();
+  }
+  _ambigPrevLists.clear();
+
+  _lastInformMarker = -1;
+
+  // assign bits to indicate which parents are missing; bit 0: dad, bit 1: mom
+  _missingPar = 0;
+  if (!theFam->_parents->first->hasData())
+    _missingPar |= 1;
+  if (!theFam->_parents->second->hasData())
+    _missingPar |= 2;
+
+  // force parents to be missing according to command-line options:
+  _missingPar |= CmdLineOpts::forceMissingParBits;
+
+
   // alternating bits set starting with bit 0 then bit 2, ...
   uint64_t allBitsSet = ~0ul; // initially: fewer depending on numChildren
   if (numChildren < 32)
@@ -185,9 +197,26 @@ void Phaser::parBitsInit(int numChildren) {
   // For flipping bits in all ambiguous children. See lookupState()
   _ambigFlips[0] = _ambigFlips[3] = 0;
   _ambigFlips[1] = _ambigFlips[2] = _parBits[1];
+
+  // when phasing chrX, get inheritance vector bits corresponding to the male
+  // and female children. Need these to deal with the differences between their
+  // inheritance patterns.
+  _childSexes[0] = _childSexes[1] = 0;
+  if (_onChrX) {
+    int numChildren = theFam->_children.length();
+    for(int c = 0; c < numChildren; c++) {
+      if (theFam->_children[c]->getSex() == 'U') {
+	fprintf(stderr, "ERROR: attempt to phase X chromosome, but child %s has unknown sex\n",
+	    theFam->_children[c]->getId());
+	exit(18);
+      }
+      uint8_t index = (theFam->_children[c]->getSex() == 'M') ? 0 : 1;
+      _childSexes[index] += 3ul << (c*2);
+    }
+  }
 }
 
-// Looks up and stores the genotype values for the parents and children
+// Looks up and stores the genotype values for the parents and children.
 // For speedy marker type detection, uses bit representation in <*GenoTypes>
 // variables to indicate which genotypes the parents and children have.
 void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
@@ -196,11 +225,13 @@ void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
   NuclearFamily::par_pair parents = theFam->_parents;
   dynarray<PersonBulk*> &children = theFam->_children;
 
-  // Get data for dad (first 2 bits) and mom (bits 3-4)
+  // Get data for dad (bits 0 and 1) and mom (bits 2 and 3)
   uint8_t dadData = (_missingPar & 1) ? G_MISS :
 				       parents->first->getBitGeno(_curMarker);
   uint8_t momData = (_missingPar & 2) ? G_MISS :
 				       parents->second->getBitGeno(_curMarker);
+  if (_onChrX && dadData == G_HET) // set males to missing instead of het on X
+    dadData = G_MISS;
   parentData = dadData + (momData << 2);
 
   // Which of the genotypes are present in the parents/children? There are
@@ -215,6 +246,8 @@ void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
   int numChildren = children.length();
   for(int c = 0; c < numChildren; c++) {
     uint8_t curChildData = children[c]->getBitGeno(_curMarker);
+    if (_onChrX && children[c]->getSex() == 'M' && curChildData == G_HET)
+      curChildData = G_MISS; // set males to missing instead of het on X
     childrenData[ curChildData ] += 3ul << (c*2);
     childrenData[4] += ((uint64_t) curChildData) << (c*2);
     childGenoTypes |= 1ul << curChildData; // observed genotype <curChildData>
@@ -225,7 +258,9 @@ void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
 
 // Determines what type of marker this is using data for the parents if present
 // or based on the observed genotype values for the the children when one or
-// both parent's data are missing
+// both parent's data are missing.
+// For markers that are/may be MT_FI_1 type, also assigns <homParGeno> as the
+// homozygous parent genotype
 int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 			  uint8_t &homParGeno) {
   // Only valid values for parentGenoTypes are between 1 and 12 (excluding 7
@@ -233,10 +268,9 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
   assert(parentGenoTypes >= 1 && parentGenoTypes <= 12);
   assert(childGenoTypes >= 1 && childGenoTypes <= 15);
 
-  if (childGenoTypes == (1 << G_MISS)) {
-    // check no data for all children case first: is ambiguous
+  // check no data for all children case first: is ambiguous
+  if (childGenoTypes == (1 << G_MISS))
     return 1 << MT_AMBIG;
-  }
 
   // stores the genotype of the non-missing parent if present; if both are
   // missing, stores 1, the value for missing data
@@ -492,6 +526,272 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
       fprintf(stderr, "ERROR: got impossible parent genotype value %d\n",
 	      parentGenoTypes);
       exit(5);
+      break;
+  }
+
+  return -1; // shouldn't happen
+}
+
+// For X chromosome sites: Determines what type of marker this is using data
+// for the parents if present or based on the observed genotype values for the
+// children when one or both parent's data are missing
+// Also attempts to impute either the dad's (necessarily) homozyogus genotype
+// or in the case that dad is not missing but mom is and is imputed to be
+// homozygous only, her genotype. Stores this <homParGeno>.
+// Also determines whether this is a special marker type that could be
+// fully or uninformative and where decisions about how to assign the parents'
+// genotypes get deferred until backtracing.
+int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
+			   uint64_t childrenData[5], uint8_t &homParGeno,
+			   bool &specialXMT) {
+  homParGeno = G_MISS; // initially; will attempt to impute below
+
+  // ensure only first four bits set and that dad (lowest order 3 bits) is not
+  // heterozygous (enforced in getParentData()):
+  assert(parentData <= 15 && (parentData & 3) != G_HET);
+  // ensure sons are not heterozygous (enforced in getParentData()):
+  assert((childrenData[G_HET] & _childSexes[0]) == 0);
+  // ensure <childGenoTypes> is valid; this is bit vector representing which of
+  // the four possible genotypes are assigned in the children
+  assert(childGenoTypes >= 1 && childGenoTypes <= 15);
+
+  // check no data for all children case first: is ambiguous
+  if (childGenoTypes == (1 << G_MISS))
+    return 1 << MT_AMBIG;
+
+  uint8_t dadGeno = parentData & 3;
+  uint8_t oppDadHomType = (dadGeno == G_HOM0) ? G_HOM1 : G_HOM0;
+  uint8_t momGeno = (parentData >> 2);
+  uint8_t oppMomHomType = (momGeno == G_HOM0) ? G_HOM1 : G_HOM0;
+  switch (momGeno) {
+    case G_HOM0:
+    case G_HOM1:
+      ////////////////////////////////////////////////////////////////////////
+      // Mom homozygous
+      if (dadGeno == momGeno) { // both homozyogus for same allele
+	if (childGenoTypes & ((1 << oppMomHomType) | (1 << G_HET)) )
+	  // Mendelian error -- invalid bits set: only hom for the same allele
+	  // as the parents and missing are possible
+	  return 1 << MT_ERROR;
+	else
+	  // both parents homozygous: uninformative marker
+	  return 1 << MT_UN;
+      }
+      else { // dad either homozygous for a different allele than Mom or missing
+	// at markers where the mom is homozygous, sons should not be
+	// homozygous for the opposite allele:
+	uint64_t maleChildHomOppMom =
+				childrenData[ oppMomHomType ] & _childSexes[0];
+	if (maleChildHomOppMom > 0)
+	  return 1 << MT_ERROR;
+
+	if (dadGeno == oppMomHomType) { // one parent homozygous 0, other 1
+	  // with both parents homozygous for different alleles, daughters
+	  // should be heterozygous or missing:
+	  uint64_t femaleChildHetGeno =
+	      (childrenData[ G_HET ] | childrenData[G_MISS]) & _childSexes[1];
+	  if (femaleChildHetGeno != _childSexes[1])
+	    return 1 << MT_ERROR;
+	}
+	else if (dadGeno == G_MISS) {
+	  // daughters must carry their dad's allele, and even though we don't
+	  // know what it is, they should not be homozygous for opposite
+	  // alleles:
+	  uint64_t femaleChildHom0 = childrenData[ G_HOM0 ] & _childSexes[1];
+	  uint64_t femaleChildHom1 = childrenData[ G_HOM1 ] & _childSexes[1];
+	  if (femaleChildHom0 > 0 && femaleChildHom1 > 0)
+	    return 1 << MT_ERROR;
+	  else if (femaleChildHom0 > 0 || femaleChildHom1 > 0) {
+	    if ((childrenData[ G_HET ] & _childSexes[1]) > 0)
+	      // Since Mom is homozygous, all female children should either be
+	      // homozygous for the same genotype or all should be heterozygous
+	      // (or could be missing). Having both types implies a Mendelian
+	      // error
+	      return 1 << MT_ERROR;
+	    // impute dad:
+	    homParGeno = (femaleChildHom0) ? G_HOM0 : G_HOM1;
+	  }
+	  else if ((childrenData[ G_HET ] & _childSexes[1]) > 0)
+	    // in this case, all the daughters are heterozygous; that means
+	    // that dad must have the opposite homozygous genotype to Mom.
+	    // impute him:
+	    homParGeno = oppMomHomType;
+	}
+
+	// no error
+	// both parents homozygous: uninformative marker
+	return 1 << MT_UN;
+      }
+
+      break;
+
+    case G_HET:
+      //////////////////////////////////////////////////////////////////////////
+      // Mom heterozygous
+
+      // with Mom heterozygous, sons can be any homozygous (or missing)
+      // genotype, and assertion above ensured they're not heterozygous, so
+      // no further checks needed on them
+      if (dadGeno != G_MISS) {
+	// daughters must carry their dad's allele, so can't be oppDadHomType:
+	uint64_t femaleChildHomOppDad =
+			      childrenData[ oppDadHomType ] & _childSexes[1];
+	if (femaleChildHomOppDad != 0)
+	  return 1 << MT_ERROR;
+
+	// mom heterozgyous: informative for her
+	// dad is always uninformative, and him being non-missing ensures this
+	// marker is not phase ambiguous
+	homParGeno = dadGeno;
+	return 1 << MT_FI_1;
+      }
+      else {
+	// dad is missing data
+
+	// daughters must carry their dad's allele, and even though we don't
+	// know what it is, they should not be homozygous for opposite alleles:
+	uint64_t femaleChildHom0 = childrenData[ G_HOM0 ] & _childSexes[1];
+	uint64_t femaleChildHom1 = childrenData[ G_HOM1 ] & _childSexes[1];
+	if (femaleChildHom0 > 0 && femaleChildHom1 > 0)
+	  return 1 << MT_ERROR;
+	else if (femaleChildHom0 > 0 || femaleChildHom1 > 0)
+	  // impute dad:
+	  homParGeno = (femaleChildHom0) ? G_HOM0 : G_HOM1;
+	else {
+	  // dad's genotype is ambiguous; if there are no sons or they are all
+	  // missing data, it's impossible to phase (Mom is het and all her
+	  // daughters are, too, with no data for sons)
+	  if ( (childrenData[G_MISS] & _childSexes[0]) == _childSexes[0] )
+	    return 1 << MT_AMBIG;
+	}
+
+	// mom heterozgyous: informative for her
+	// dad is always uninformative, and we checked above that the marker is
+	// not ambiguous
+	return 1 << MT_FI_1;
+      }
+
+      break;
+
+    case G_MISS:
+      //////////////////////////////////////////////////////////////////////////
+      // Mom is missing, will try to impute her
+
+      // with Mom missing, she could be heterozygous, and in that case, sons
+      // could be any homozygous (or missing) genotype. Assertion above ensured
+      // the sons are not heterozygous, so no further checks needed on them as
+      // far as Mendelian errors
+      {
+	// first, we'll take one step to try to infer Mom:
+	// if sons or daughters differ in their genotype, Mom is heterozygous.
+	// the following doesn't separate out sons and daughters, but we
+	// don't need to: we'll check next for Mendelian errors, but if we
+	// ignore that, the following condition is true if either (a) there are
+	// sets of sons of opposite homozygous types or (b) there are daughters
+	// of one type and sons of the other (or both [a] and [b]).
+	bool momMustBeHet = childrenData[ G_HOM0 ] > 0 &&
+			    childrenData[ G_HOM1 ] > 0;
+
+	if (dadGeno != G_MISS) {
+	  // daughters must carry their dad's allele, so can't be oppDadHomType:
+	  uint64_t femaleChildHomOppDad =
+			      childrenData[ oppDadHomType ] & _childSexes[1];
+	  if (femaleChildHomOppDad != 0)
+	    return 1 << MT_ERROR;
+
+	  // if there are heterozygous daughters and either daughters or sons
+	  // that are homozygous for the same allele as Dad, Mom is
+	  // heterozygous (the homozygous children inherited one allelic type
+	  // and the daughters necessarily got the other allele from the Mom)
+	  momMustBeHet = momMustBeHet || ( childrenData[ dadGeno ] > 0 &&
+			 (childrenData[ G_HET ] & _childSexes[1]) > 0 );
+	  if (momMustBeHet) {
+	    // mom heterozgyous: informative for her
+	    // dad is always uninformative, and him being non-missing ensures
+	    // this marker is not phase ambiguous
+	    homParGeno = dadGeno;
+	    return 1 << MT_FI_1;
+	  }
+	  else {
+	    // if Mom is homozygous, she's homozygous for the same allele as
+	    // the children are (note that if both homozygous types are present
+	    // in the children, <momMustBeHet> is assigned above):
+	    if (childrenData[ G_HOM0 ] > 0)
+	      homParGeno = G_HOM0;
+	    else if (childrenData[ G_HOM1 ] > 0)
+	      homParGeno = G_HOM1;
+	    else
+	      // all children het; this implies there's > 0 daughters and they
+	      // would have inherited their dad's allele. That means they
+	      // inherited the opposite allele from their Mom, and if Mom is
+	      // homozyogus, she's homozygous for the opposite allele to dad:
+	      homParGeno = oppDadHomType;
+	    // Mom could be homozygous but may also be heterozygous with one of
+	    // her alleles untransmitted:
+	    return (1 << MT_UN) | (1 << MT_FI_1);
+	  }
+	}
+	else {
+	  // both Mom and Dad missing
+
+	  // daughters must carry their dad's allele, and even though we don't
+	  // know what it is, they should not be homozygous for opposite
+	  // alleles:
+	  uint64_t femaleChildHom0 = childrenData[ G_HOM0 ] & _childSexes[1];
+	  uint64_t femaleChildHom1 = childrenData[ G_HOM1 ] & _childSexes[1];
+	  if (femaleChildHom0 > 0 && femaleChildHom1 > 0)
+	    return 1 << MT_ERROR;
+	  else if (femaleChildHom0 > 0 || femaleChildHom1 > 0)
+	    // impute dad:
+	    homParGeno = (femaleChildHom0) ? G_HOM0 : G_HOM1;
+	  else {
+	    // dad's genotype is ambiguous; if there are no sons or they are all
+	    // missing data, it's impossible to phase (Mom may be het and all
+	    // the daughters are het, too, with no data for sons)
+	    if ( (childrenData[G_MISS] & _childSexes[0]) == _childSexes[0] )
+	      return 1 << MT_AMBIG;
+	  }
+
+	  // if there are both homozygous and heterozygous daughters, Mom is
+	  // heterozygous
+	  momMustBeHet = momMustBeHet ||
+			 ( (femaleChildHom0 > 0 || femaleChildHom1 > 0) &&
+			   (childrenData[ G_HET ] & _childSexes[1]) > 0 );
+	  if (momMustBeHet) {
+	    // mom heterozgyous: informative for her
+	    // dad is always uninformative, and we checked above that the
+	    // marker is not ambiguous
+	    return 1 << MT_FI_1;
+	  }
+	  else {
+	    if (homParGeno == G_MISS && _childSexes[0] > 0) {
+	      // Special X marker type here -- corner case which is:
+	      // - all daughters are het (otherwise homParGeno != G_MISS)
+	      // - at least one son is non-missing (otherwise MT_AMBIG)
+	      // - all sons must have the same homozygous genotype or
+	      //   <momMustBeHet> would be true
+	      // => in this case, either:
+	      //    a. the marker is FI
+	      //    b. the marker is uninformative with Mom being the same
+	      //       homozygous type as the son, and Dad being the opposite
+	      //       homozygous type
+	      // we'll initially assume that the site is uninformative and then
+	      // during backtracing, check the surrounding IVs to see if it's
+	      // possible for Mom to be FI without introducing more
+	      // recombinations
+	      // we'll store the homozygous type dad would have if the marker
+	      // is uninformative (opposite the sons' homozygous type)
+	      homParGeno = ( (childrenData[ G_HOM0 ] & _childSexes[0]) > 0 ) ?
+			   G_HOM1 : G_HOM0;
+	      specialXMT = true;
+	    }
+	    // Mom could be homozygous but may also be heterozygous with one of
+	    // her alleles untransmitted:
+	    return (1 << MT_UN) | (1 << MT_FI_1);
+	  }
+	}
+      }
+
       break;
   }
 

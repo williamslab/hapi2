@@ -112,13 +112,16 @@ class Phaser {
     // private static methods
     //////////////////////////////////////////////////////////////////
 
-    static void parBitsInit(int numChildren);
+    static void initPhaseState(NuclearFamily *theFam);
     static void getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
 			      uint8_t &parentGenoTypes,
 			      uint64_t childrenData[5], uint8_t &childGenoTypes,
 			      int &numMissChildren);
     static int  getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 			      uint8_t &homParGeno);
+    static int  getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
+			       uint64_t childrenData[5], uint8_t &homParGeno,
+			       bool &specialXMT);
     static void printMarkerType(int mt, FILE *log);
     static void makePartialStates(dynarray<State> &partialStates,
 				  int markerTypes, uint8_t parentData,
@@ -318,6 +321,9 @@ class Phaser {
     // Note these values are variable for each family depending on the number of
     // children in it.
     static uint64_t _parBits[3];
+    // Inheritance vector bits that correspond to male (index 0) and female (1)
+    // children. Only assigned when phasing the X chromosome
+    static uint64_t _childSexes[2];
     // When changing the phase one or both parents, the inheritance vector
     // values corresponding to that parent are flipped. For the four different
     // possibilities, corresponding to the bits to be flipped for one child,
@@ -333,6 +339,9 @@ class Phaser {
     // For tracking information about genetic distances
     static int _lastInformMarker;
     static int _curMarker;
+
+    // Are we analyzing the X chromosome?
+    static bool _onChrX;
 
     // which parents are missing? Bit vector with bit 0: dad, bit 1: mom
     static uint8_t _missingPar;
