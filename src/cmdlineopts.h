@@ -106,6 +106,24 @@ class CmdLineOpts {
     // with data to a parent without data.
     static int bothParHetThreshold;
 
+    // For detecting when each of the parents transmitted the same haplotype
+    // to all the children, meaning that there are long stretches with zero
+    // informative markers. HAPI will force in an informative marker in such
+    // cases for every interval of this number of markers in which there are
+    // fewer than <forceInformTolerance> markers detected as informative
+    static int forceInformInterval;
+
+    // See comment on previous field: allow this many informative markers in
+    // <forceInformInterval> number of markers. If more than this, will not
+    // introduce a forced informative marker.
+    static int forceInformTolerance;
+
+    // See comment in previous two fields: this many informative markers in
+    // a <forceInformInterval> number of markers stops the tracking of such
+    // intervals. This is in place to allow for a burst of erroneous markers
+    // in the midst of a large one hap trans region.
+    static int numInformToBreakForceInform;
+
     // Verbose log?
     static int verbose;
 

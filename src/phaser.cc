@@ -25,8 +25,10 @@ uint64_t Phaser::_parBits[3];
 uint64_t Phaser::_childSexes[2];
 uint64_t Phaser::_flips[4];
 uint64_t Phaser::_ambigFlips[4];
-int      Phaser::_lastInformMarker;
 int      Phaser::_curMarker;
+int      Phaser::_lastInformMarker;
+int      Phaser::_lastForceInformMarker;
+int      Phaser::_lastForceInformIndex;
 bool     Phaser::_onChrX;
 uint8_t  Phaser::_missingPar;
 
@@ -61,51 +63,13 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
 		  childGenoTypes, numMissChildren);
 
     ///////////////////////////////////////////////////////////////////////////
-    // Step 1: Determine marker type and check for Mendelian errors
-    // TODO: refactor / update comment
-    int mt;
-    bool specialXMT = false; // see getMarkerTypeX() code for this special type
-    if (!_onChrX) // autosomal?
-      mt = getMarkerType(parentGenoTypes, childGenoTypes, homParGeno);
-    else // X
-      mt = getMarkerTypeX(childGenoTypes, parentData, childrenData, homParGeno,
-			  specialXMT);
-    assert(mt > 0 && (mt & ~((1 << MT_N_TYPES) -1) ) == 0);
-
-    if (CmdLineOpts::verbose)
-      printMarkerType(mt, log);
-
-    if (mt & ((1 << MT_ERROR) | (1 << MT_AMBIG))) {
-      // should only be one of the above:
-      assert(mt == (1 << MT_ERROR) || mt == (1 << MT_AMBIG));
-      switch(mt) {
-	case 1 << MT_ERROR:
-	  theFam->setStatus(_curMarker, PHASE_ERROR, parentData,
-			    childrenData[4], childrenData[G_MISS] &_parBits[0]);
-	  break;
-	case 1 << MT_AMBIG:
-	  theFam->setStatus(_curMarker, PHASE_AMBIG, parentData,
-			    childrenData[4], childrenData[G_MISS] &_parBits[0]);
-	  break;
-      }
-      continue;
-    }
-
-    // TODO: handle X chromosome
-    if (mt & (1 << MT_UN)) {
-      uint8_t swapHetChildren = 0;
-      if ((parentData & 3) == G_HOM1 || ((parentData >> 2) & 3) == G_HOM0)
-	// The default way to print phase of heterozygous children at
-	// uninformative markers is with allele 0 transmitted by dad and 1
-	// transmitted by mom. When Dad is homozygous for allele 1 or (when
-	// he is missing) Mom is homozygous for allele 0, this order needs to
-	// be swapped:
-	swapHetChildren = 1;
-      theFam->setUninform(_curMarker, parentData, childrenData[4],
-			  childrenData[G_MISS] & _parBits[0], homParGeno,
-			  swapHetChildren);
-      continue;
-    }
+    // Step 1: Determine marker type; handle trivial, ambiguous, or erroneous
+    // markers; and check for the need to force an informative marker
+    int mt = getMarkerType_prelimAnalyses(theFam, parentData, parentGenoTypes,
+					  childGenoTypes, childrenData,
+					  homParGeno, log);
+    if (mt < 0)
+      continue; // marker processing complete; no further phasing needed
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 2: For each consistent marker type, deduce the inheritance vector
@@ -166,6 +130,8 @@ void Phaser::initPhaseState(NuclearFamily *theFam) {
   _ambigPrevLists.clear();
 
   _lastInformMarker = -1;
+  _lastForceInformMarker = -1;
+  _lastForceInformIndex = -1;
 
   // assign bits to indicate which parents are missing; bit 0: dad, bit 1: mom
   _missingPar = 0;
@@ -256,13 +222,109 @@ void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
   }
 }
 
+// Determines the type of the current marker (informative for one parent,
+// partly informative, uninformative, error, ambiguous) and processes the
+// trivial marker types (error, ambiguous, and uninformative).
+// Also checks for the need to force in an informative marker, which is needed
+// when (on chrX) the Mom is missing data and she has transmitted the same
+// chromosome to all the children.
+int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
+					 uint8_t parentData,
+					 uint8_t parentGenoTypes,
+					 uint8_t childGenoTypes,
+					 uint64_t childrenData[5],
+					 uint8_t &homParGeno,
+					 FILE *log) {
+  // First get the marker type:
+  int mt;
+  bool specialXMT = false; // see getMarkerTypeX() code for this special type
+  if (!_onChrX) // autosomal?
+    mt = getMarkerTypeAuto(parentGenoTypes, childGenoTypes, homParGeno);
+  else // X
+    mt = getMarkerTypeX(childGenoTypes, parentData, childrenData, homParGeno,
+	specialXMT);
+  assert(mt > 0 && (mt & ~((1 << MT_N_TYPES) -1) ) == 0);
+
+  if (CmdLineOpts::verbose)
+    printMarkerType(mt, log);
+
+  // Can immediately handle erroneous or ambiguous markers:
+  if (mt & ((1 << MT_ERROR) | (1 << MT_AMBIG))) {
+    // should only be one of the above:
+    assert(mt == (1 << MT_ERROR) || mt == (1 << MT_AMBIG));
+    switch(mt) {
+      case 1 << MT_ERROR:
+	theFam->setStatus(_curMarker, PHASE_ERROR, parentData,
+			  childrenData[4], childrenData[G_MISS] &_parBits[0]);
+	break;
+      case 1 << MT_AMBIG:
+	theFam->setStatus(_curMarker, PHASE_AMBIG, parentData,
+			  childrenData[4], childrenData[G_MISS] &_parBits[0]);
+	break;
+    }
+    return -1; // no further phasing needed
+  }
+
+  // Handle uninformative markers:
+  if (mt & (1 << MT_UN)) {
+    // On chrX, when Mom is missing data, long stretches without any
+    // informative markers often mean that she has transmitted only one
+    // haplotype to the children. We'll force an informative marker after a
+    // sufficiently long stretch so that the inheritance vector reflects the
+    // one haplotype transmission status.
+    if (_onChrX && (_missingPar & 2) && (mt & (1 << MT_FI_1)) &&
+	_curMarker >= CmdLineOpts::oneHapTransThreshold) {
+      bool forceInform = checkForceInform();
+      if (forceInform) {
+	// will add a new marker later, and its index is this:
+	_lastForceInformIndex = _hmmMarker.length();
+	_lastForceInformMarker = _curMarker;
+	if (specialXMT || ((parentData & 3) != G_MISS))
+	  // going to use this as a fully informative marker; need to store
+	  // dad's genotype in <homParGeno>. Occassionally (specifically in
+	  // the cases that this if statement specifies) <homParGeno> will
+	  // store what Mom's homozygous genotype would be if she is homozygous.
+	  // Get dad's homozygous genotype (or may be missing)
+	  homParGeno = parentData & 3;
+	return mt;
+      }
+    }
+
+    if (!specialXMT) { // standard uninformative
+      uint8_t swapHetChildren = 0;
+      if ((parentData & 3) == G_HOM1 || ((parentData >> 2) & 3) == G_HOM0)
+	// The default way to print phase of heterozygous children at
+	// uninformative markers is with allele 0 transmitted by dad and 1
+	// transmitted by mom. When Dad is homozygous for allele 1 or (when
+	// he is missing) Mom is homozygous for allele 0, this order needs to
+	// be swapped:
+	swapHetChildren = 1;
+      theFam->setUninform(_curMarker, parentData, childrenData[4],
+			  childrenData[G_MISS] & _parBits[0], homParGeno,
+			  swapHetChildren);
+    }
+    else { // special X chromosome case
+      uint8_t swapHetChildren = 0;
+      if (homParGeno == G_HOM1) // homParGeno here is for dad
+	// see case just above
+	swapHetChildren = 1;
+      theFam->setSpecialX(_curMarker, parentData, childrenData[4],
+			  childrenData[G_MISS] & _parBits[0], homParGeno,
+			  swapHetChildren);
+    }
+    return -1; // no further phasing needed
+  }
+
+  return mt;
+}
+
 // Determines what type of marker this is using data for the parents if present
 // or based on the observed genotype values for the the children when one or
 // both parent's data are missing.
 // For markers that are/may be MT_FI_1 type, also assigns <homParGeno> as the
 // homozygous parent genotype
-int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
-			  uint8_t &homParGeno) {
+int Phaser::getMarkerTypeAuto(uint8_t parentGenoTypes, uint8_t childGenoTypes,
+			      uint8_t &homParGeno) {
   // Only valid values for parentGenoTypes are between 1 and 12 (excluding 7
   // and 11 which are caught below)
   assert(parentGenoTypes >= 1 && parentGenoTypes <= 12);
@@ -533,14 +595,21 @@ int Phaser::getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 }
 
 // For X chromosome sites: Determines what type of marker this is using data
-// for the parents if present or based on the observed genotype values for the
-// children when one or both parent's data are missing
+// for the parents (if present) or based on the observed genotype values for
+// the children when one or both parent's data are missing
+//
 // Also attempts to impute either the dad's (necessarily) homozyogus genotype
-// or in the case that dad is not missing but mom is and is imputed to be
-// homozygous only, her genotype. Stores this <homParGeno>.
-// Also determines whether this is a special marker type that could be
-// fully or uninformative and where decisions about how to assign the parents'
-// genotypes get deferred until backtracing.
+// or in the case that dad is not missing but mom is, provides the homozygous
+// genotype she has in the case that she is homozygous. Stores this in
+// <homParGeno>. Note that, if Mom is missing, <homParGeno> being non-missing
+// does not imply that she is homozygous, only what her genotype would be if
+// she is homozygous.
+// NOTE: if dad is missing, <homParGeno> is his imputed genotype _except_ if
+// <specialXMT> is true
+//
+// Also determines whether this is a special marker type that could be fully
+// informative or uninformative and where decisions about how to assign the
+// parents' genotypes get deferred until backtracing.
 int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 			   uint64_t childrenData[5], uint8_t &homParGeno,
 			   bool &specialXMT) {
@@ -702,7 +771,8 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	  // if there are heterozygous daughters and either daughters or sons
 	  // that are homozygous for the same allele as Dad, Mom is
 	  // heterozygous (the homozygous children inherited one allelic type
-	  // and the daughters necessarily got the other allele from the Mom)
+	  // and the het daughters necessarily got the other allele from the
+	  // Mom)
 	  momMustBeHet = momMustBeHet || ( childrenData[ dadGeno ] > 0 &&
 			 (childrenData[ G_HET ] & _childSexes[1]) > 0 );
 	  if (momMustBeHet) {
@@ -717,15 +787,15 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	    // the children are (note that if both homozygous types are present
 	    // in the children, <momMustBeHet> is assigned above):
 	    if (childrenData[ G_HOM0 ] > 0)
-	      homParGeno = G_HOM0;
+	      homParGeno = G_HOM0; // Mom's potential genotype
 	    else if (childrenData[ G_HOM1 ] > 0)
-	      homParGeno = G_HOM1;
+	      homParGeno = G_HOM1; // Mom's potential genotype
 	    else
 	      // all children het; this implies there's > 0 daughters and they
 	      // would have inherited their dad's allele. That means they
 	      // inherited the opposite allele from their Mom, and if Mom is
 	      // homozyogus, she's homozygous for the opposite allele to dad:
-	      homParGeno = oppDadHomType;
+	      homParGeno = oppDadHomType; // Mom's potential genotype
 	    // Mom could be homozygous but may also be heterozygous with one of
 	    // her alleles untransmitted:
 	    return (1 << MT_UN) | (1 << MT_FI_1);
@@ -819,6 +889,58 @@ void Phaser::printMarkerType(int mt, FILE *log) {
       fprintf(log, " Both parents heteterozygous\n");
   }
   fflush(log);
+}
+
+// Check whether a forced informative marker should be placed at the current
+// marker. Normally a marker that can be explained as uninformative will be
+// treated as such, but on chrX, if Mom transmitted only one chromosome, there
+// will not be any informative markers. To force HAPI to recognize that only
+// one haplotype was transmitted, the follow code checks certain marker
+// count-based thresholds, and will force in an informative marker (which will
+// necessarily imply that Mom transmitted the same chromosome to all her
+// children).
+bool Phaser::checkForceInform() {
+  // TODO: would like to check the IV, too
+  if (_lastForceInformMarker < 0) { // no recent forced informative marker
+    // which marker should we count from? We'll look back the maximum number of
+    // informative markers that we tolerate in a force inform interval or to
+    // the beginning of the chromosome if not enough markers have passed.
+    int anchorInfMarker =
+      (_hmmMarker.length() > CmdLineOpts::forceInformTolerance) ?
+	_hmmMarker[_hmmMarker.length() - CmdLineOpts::forceInformTolerance] : 0;
+    return /*forceInform=*/ _curMarker - anchorInfMarker >=
+					      CmdLineOpts::forceInformInterval;
+  }
+  else if (_curMarker - _lastForceInformMarker >=
+					    CmdLineOpts::forceInformInterval) {
+    // In a one hap trans region for Mom on chrX.
+    // Because erroneous sites can interrupt such a region, we adopt a strategy
+    // to ensure that these errors don't prevent a forced informative marker
+    // from being added:
+    // (1) if <= 2 "informative" (likely erroneous) markers have occurred since
+    // the last force informative marker, we'll use the last force informative
+    // marker as the "anchor" for deciding when to add another one: we'll add a
+    // new marker now.
+    // (2) if > 2 but < 10 "informative" (likely erroneous) markers have
+    // occurred since the last informative marker, we'll reset the "anchor"
+    // marker to the informative site just after its current location.
+    // (3) If >= 10 "informative" markers have occurred, we'll assume we've
+    // left the OHT region and stop tracking the last force inform marker
+    int numInformSinceLastForce = _hmmMarker.length() - 1 -
+							  _lastForceInformIndex;
+    if (numInformSinceLastForce <= CmdLineOpts::forceInformTolerance)
+      return /*forceInform=*/ true;
+    else if (numInformSinceLastForce < CmdLineOpts::numInformToBreakForceInform) {
+      _lastForceInformIndex += numInformSinceLastForce -
+					      CmdLineOpts::forceInformTolerance;
+      _lastForceInformMarker = _hmmMarker[ _lastForceInformIndex ];
+    }
+    else
+      _lastForceInformIndex = _lastForceInformMarker = -1;
+  }
+
+  // not forcing an informative marker (at least not at this marker)
+  return false;
 }
 
 // Given the marker types <markerTypes> that are consistent with the family

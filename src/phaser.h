@@ -117,12 +117,20 @@ class Phaser {
 			      uint8_t &parentGenoTypes,
 			      uint64_t childrenData[5], uint8_t &childGenoTypes,
 			      int &numMissChildren);
-    static int  getMarkerType(uint8_t parentGenoTypes, uint8_t childGenoTypes,
-			      uint8_t &homParGeno);
+    static int  getMarkerType_prelimAnalyses(NuclearFamily *theFam,
+					     uint8_t parentData,
+					     uint8_t parentGenoTypes,
+					     uint8_t childGenoTypes,
+					     uint64_t childrenData[5],
+					     uint8_t &homParGeno,
+					     FILE *log);
+    static int  getMarkerTypeAuto(uint8_t parentGenoTypes,
+				  uint8_t childGenoTypes, uint8_t &homParGeno);
     static int  getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 			       uint64_t childrenData[5], uint8_t &homParGeno,
 			       bool &specialXMT);
     static void printMarkerType(int mt, FILE *log);
+    static bool checkForceInform();
     static void makePartialStates(dynarray<State> &partialStates,
 				  int markerTypes, uint8_t parentData,
 				  uint8_t homParGeno,
@@ -337,8 +345,10 @@ class Phaser {
     static uint64_t _ambigFlips[4];
 
     // For tracking information about genetic distances
-    static int _lastInformMarker;
     static int _curMarker;
+    static int _lastInformMarker;
+    static int _lastForceInformMarker;
+    static int _lastForceInformIndex;
 
     // Are we analyzing the X chromosome?
     static bool _onChrX;
