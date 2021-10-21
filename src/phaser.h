@@ -144,6 +144,8 @@ class Phaser {
     static void makeFullStates(const dynarray<State> &partialStates,
 			       int firstMarker, const uint64_t childrenData[5],
 			       int numChildren, int numMissChildren);
+    static void addStatesNoPrev(const dynarray<State> &partialStates,
+				int firstMarker, bool error = false);
     static uint8_t isIVambigPar(uint64_t iv, uint64_t ambigIV,
 				uint64_t unassigned = 0);
     static void mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
