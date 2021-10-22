@@ -1229,6 +1229,24 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates,
     for(auto it = _prevErrorStates.begin() + numPrevErrorStatesAdded;
 	     it != _prevErrorStates.end(); ) {
       int errorHMMIndex = it->first;
+
+      // Only consider error paths that span fewer than a set number of markers
+      // except for the immediately previous marker
+      // Note that this interacts with the forced informative markers (see
+      // checkForceInform()), and so we set the maximum distance to be a
+      // meaningful number of sites more than this interval. (This is to ensure
+      // that at least one forced informative marker has been added, presumably
+      // at the current site, so that all previous markers are marked as
+      // errors.)
+      bool errorSpanTooLarge = _curMarker - _hmmMarker[ errorHMMIndex ] >
+					  CmdLineOpts::forceInformInterval + 50;
+      // ... except we'll always allow for errors from the immediately previous
+      // marker (meaning we'll allow transitions from one index before it):
+      if (errorSpanTooLarge && errorHMMIndex != prevHMMIndex -1) {
+	it = _prevErrorStates.erase(it); // no need to consider this path later
+	continue;
+      }
+
       uint32_t errorPrevIdx = it->second;
       State *errorPathPrevState = _hmm[ errorHMMIndex ][ errorPrevIdx ];
 
@@ -1265,12 +1283,8 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates,
     }
 
     // Can have all the informative sites up to <_curMarker> be assigned as
-    // erroneous. Note that this interacts with the forced informative markers
-    // (see checkForceInform()), and so we set the maximum distance for setting
-    // all sites as errors to be a meaningful number of sites more than this
-    // interval. (This is to ensure that at least one forced informative marker
-    // has been added, presumably at the current site, so that all previous
-    // markers are marked as errors.)
+    // erroneous. See comment above the <errorSpanTooLarge> variable for why
+    // this bound is set at it is (interacts with tforced informative markers)
     bool allowAllPrevSitesErrors =
 			  _hmmMarker.length() - 1 <= CmdLineOpts::errorLength &&
 			  _curMarker <= CmdLineOpts::forceInformInterval + 50;
