@@ -2801,9 +2801,28 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
       altPhaseType ^= flipType;
     }
 
-    if (theState->homParentGeno == G_MISS)
-      theState->homParentGeno = homParentGeno;
-    assert(hetParent == 2 || theState->homParentGeno == homParentGeno);
+    if (theState->homParentGeno == G_MISS) {
+      if (_onChrX)
+	// on the X chromosome, we try to impute Dad's genotype using the
+	// daughters. Sometimes both possibilities remain and we consider states
+	// of both <homParentGeno> values. Often one of these is better than
+	// the other, but in some corner cases (see backtrace() for a detailed
+	// example), there can be an ambiguity. We'll assign the genotype here
+	// and, in later iterations, if the imputed genotype for Dad is
+	// different from the current one, the else branch just below will set
+	// him to be missing. Also see the comment above assertion below.
+	theState->homParentGeno = homParentGeno;
+    }
+    else if (homParentGeno != G_MISS &&
+				      theState->homParentGeno != homParentGeno)
+      theState->homParentGeno = G_MISS;
+    // In general, we expect that, unless <isPI> (so <hetParent> == 2), the
+    // <homParentGeno> should match across different ambiguous assignments of
+    // states here. However, the X chromosome is a bit more involved, and as
+    // needed, we'll set <homParentGeno> to missing (if there are conflicts)
+    // and therefore the latter part of the assertion need not hold if <_onChrX>
+    assert(_onChrX || hetParent == 2 ||
+				      theState->homParentGeno == homParentGeno);
 
     // Update <numMarkersSinceNonHetPar>:
     for(uint8_t p = 0; p < 2; p++) {
@@ -3288,6 +3307,9 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 	// <transHap>.
 	// The homozygous genotype is either 0 or 3, and we'll divide by 3 to
 	// get a boolean:
+	// Note: on the X chromosome, <homParentGeno> can be missing, which
+	// leads to phaseType == 0. This is OK: that parent (the dad) will have
+	// both alleles missing and his phase won't matter.
 	uint8_t homGenoKind = _hmm[hmmIndex][curStateIdx]->homParentGeno / 3;
 	// If the phase type is 0, when the genotype is heterozygous,
 	// haplotype 0 is allele 0, and haplotype 1 is allele 1. Whichever
@@ -3314,6 +3336,10 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     // parent heterozygosity
     bool homParGenoAssigned = curState->hetParent < 2 ||
 						      (curAmbigParHet & 3) != 0;
+    // deal also with X chromosome corner case (see checkMinUpdate() and the
+    // if (_onChrX) statement below):
+    homParGenoAssigned = homParGenoAssigned &&
+					  (!_onChrX || curHomParGeno != G_MISS);
     uint8_t ambigHomParGeno = 0;
 
     // Find all the possible parent phase types that have equal and minimal
@@ -3348,7 +3374,22 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 	curArbitraryPar |= ambigState->arbitraryPar;
       }
 
-      if (ambigState->hetParent < 2 || (ambigState->ambigParHet & 3) != 0) {
+      if (_onChrX) {
+	// On chrX, if dad is missing data, he is imputed using daughters; if,
+	// for example, there's only one daughter and she is heterozygous and
+	// _may_ have recombined relative to the previous marker, there's no
+	// information to tell us which allele is from Mom -- she could have
+	// transmitted either. Note that, this case -- which came up in
+	// simulated data -- arises when there is a recombination that becomes
+	// certain to have occurred once we encounter a marker where the
+	// recombined daughter is homozygous, but it may or may not have
+	// occurred at any markers between sites where she is homozygous.
+	if (homParGenoAssigned && ambigState->homParentGeno != curHomParGeno) {
+	  curHomParGeno = G_MISS;
+	  homParGenoAssigned = false;
+	}
+      }
+      else if (ambigState->hetParent < 2 || (ambigState->ambigParHet & 3) !=0) {
 	assert(ambigState->homParentGeno != G_MISS);
 	if (!homParGenoAssigned) {
 	  curHomParGeno = ambigState->homParentGeno;
@@ -3444,9 +3485,10 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     // <curHomParGeno> is non-missing iff <homParGenoAssigned>
     assert((curHomParGeno != G_MISS) == homParGenoAssigned);
     // either we have a homozygous parent genotype OR the site is PI with no
-    // ambiguity in parent heterozygosity
+    // ambiguity in parent heterozygosity OR this is chrX (with no data for
+    // daughters)
     assert(curHomParGeno != G_MISS ||
-	   (curState->hetParent == 2 && (curAmbigParHet & 3) == 0));
+	   (curState->hetParent == 2 && (curAmbigParHet & 3) == 0) || _onChrX);
     assert(!ambigHomParGeno);
     theFam->setPhase(_hmmMarker[hmmIndex], curState->iv,
 		     curState->ambig & _parBits[1], missing, ivFlippable,
