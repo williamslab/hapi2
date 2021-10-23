@@ -32,6 +32,8 @@ int      Phaser::_lastForceInformMarker;
 int      Phaser::_lastForceInformIndex;
 bool     Phaser::_onChrX;
 uint8_t  Phaser::_missingPar;
+uint8_t  Phaser::_firstMissP;
+uint8_t  Phaser::_limitMissP;
 
 extern uint8_t swap01Phase[4][16];
 extern uint8_t swap2Phase[4][16];
@@ -143,6 +145,17 @@ void Phaser::initPhaseState(NuclearFamily *theFam) {
 
   // force parents to be missing according to command-line options:
   _missingPar |= CmdLineOpts::forceMissingParBits;
+
+  // for looping over missing parents for penalty assignment
+  // analyze parent 0 if bit 0 in _missingPar is 1; otherwise start looping
+  // from parent 1 (result of this is either 0 or 1):
+  _firstMissP = 1 - (_missingPar & 1);
+  // don't analyze parent 0 (the dad) on the X chromosome: no penalties needed.
+  // the following will flip 0 to 1 iff _firstMissP == 0 and _onChrX == 1
+  _firstMissP ^= (~_firstMissP) & _onChrX;
+  // analyze parent 1 if bit 1 in _missingPar is 1; otherwise shouldn't iterate
+  // to 1 (result of this is either 1 or 2):
+  _limitMissP = (_missingPar >> 1) + 1;
 
 
   // alternating bits set starting with bit 0 then bit 2, ...
@@ -1336,23 +1349,14 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
     // (b) subtract 50 markers from <numMarkersToCur> if the parent is
     // heterozygous, ensuring it doesn't go negative:
 
-    // TODO: make static versions of these:
-    // want to analyze parent 0 if bit 0 in _missingPar is 1; otherwise start
-    // from parent 1 (result of this is either 0 or 1):
-    int firstP = 1 - (_missingPar & 1);
-    // want to analyze parent 2 if bit 1 in _missingPar is 1; otherwise
-    // shouldn't iterate to 1 (result of this is either 1 or 2):
-    int limitP = (_missingPar >> 1) + 1;
     uint8_t isPI = newState->hetParent >> 1;
-    for(int p = firstP; p < limitP; p++) {
+    for(int p = _firstMissP; p < _limitMissP; p++) {
       if (isPI || newState->hetParent == p)
 	newState->numMarkersSinceNonHetPar[p] = max(0,
 						    numMarkersToCur - 50);
       else
 	newState->numMarkersSinceNonHetPar[p] = numMarkersToCur;
     }
-    // no need for penalties for Dad if we're analyzing chrX, so set to 0 if so
-    newState->numMarkersSinceNonHetPar[0] *= (1 - _onChrX);
 
     // PI states are heterozygous for both parents, so count is 1 when <isPI>
     // and zero otherwise (is a one het par marker in that case)
@@ -1676,13 +1680,7 @@ void Phaser::checkPenalty(const State *prevState, uint8_t hetParent,
 			  int16_t numMarkersSinceNonHetPar[2],
 			  int16_t &numMarkersSinceOneHetPar,
 			  const uint64_t childrenData[5]) {
-  // want to analyze parent 0 if bit 0 in _missingPar is 1; otherwise start from
-  // parent 1 (result of this is either 0 or 1):
-  int firstP = 1 - (_missingPar & 1);
-  // want to analyze parent 2 if bit 1 in _missingPar is 1; otherwise shouldn't
-  // iterate to 1 (result of this is either 1 or 2):
-  int limitP = (_missingPar >> 1) + 1;
-  for(int p = firstP; p < limitP; p++) {
+  for(uint8_t p = _firstMissP; p < _limitMissP; p++) {
     // minimum count of number of parent haplotypes transmitted: 1 or 2.
     // initialize to impossible value so we can detect if it's changed:
     uint8_t minHapTrans = 0;
@@ -2186,19 +2184,11 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   numRecombs[0] = popcount(recombs);
   uint8_t curParPhase = initParPhase;
 
-  // For "penalties" only need to analyze the missing data parents:
-  // want to analyze parent 0 if bit 0 in _missingPar is 1; otherwise start from
-  // parent 1 (result of this is either 0 or 1):
-  int firstP = 1 - (_missingPar & 1);
-  // want to analyze parent 2 if bit 1 in _missingPar is 1; otherwise shouldn't
-  // iterate to 1 (result of this is either 1 or 2):
-  int limitP = (_missingPar >> 1) + 1;
-
   // Is the penalty due to the fact that the IV values corresponding to a
   // parent are unassigned?
   uint64_t unassignedPenalty[2] = { 0, 0 };
   if (fullUnassigned) {
-    for(int p = firstP; p < limitP; p++) {
+    for(int p = _firstMissP; p < _limitMissP; p++) {
       if (applyPenalty[p] &&
 	  (allButOneIV[p] & fullUnassigned) == (fullUnassigned & _parBits[p])) {
 	unassignedPenalty[p] = allButOneIV[p];
@@ -2216,7 +2206,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // number of recombinations from the previous state? Decided below
   uint8_t ambigLocal = 0;
 
-  for(int p = firstP; p < limitP; p++)
+  for(int p = _firstMissP; p < _limitMissP; p++)
     assert(allButOneIV[p] == 0 ||
 	   prevState->numMarkersSinceNonHetPar[p] < 0 || applyPenalty[p]);
 
@@ -2227,7 +2217,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // how many penalty "recombinations" should we apply?
   int8_t penaltyCount = 0;
   const uint8_t THE_PENALTY = 1; // if there is a penalty
-  for(int p = firstP; p < limitP; p++) {
+  for(int p = _firstMissP; p < _limitMissP; p++) {
     if (applyPenalty[p]) { // are the IV values in the penalty scenario?
       if ((~recombs) & allButOneIV[p] & _parBits[p])
 	// no recombination in the one child that differs for a missing data
@@ -2338,7 +2328,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     curCount[0] = popcount(recombs);
 
     int8_t curPenalty = 0;
-    for(int p = firstP; p < limitP; p++) {
+    for(int p = _firstMissP; p < _limitMissP; p++) {
       if (applyPenalty[p]) { // are the IV values in the penalty scenario?
 	if ((~recombs) & allButOneIV[p] & _parBits[p])
 	  // no recombination in the one child that differs for a missing data
@@ -2536,7 +2526,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 
       // For next state: reset and update penalty "recombinations":
       penaltyCount = 0;
-      for(int p = firstP; p < limitP; p++) {
+      for(int p = _firstMissP; p < _limitMissP; p++) {
 	if (applyPenalty[p]) { // are the IV values in the penalty scenario?
 	  if ((~recombs) & allButOneIV[p] & _parBits[p])
 	    // no recombination in the one child that differs for a missing data
