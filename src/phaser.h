@@ -241,6 +241,12 @@ class Phaser {
 				     const dynarray<State*> &prevStates,
 				     BT_ambig_info &thePrevInfo,
 				     uint8_t &numAmbig1Recombs);
+    static uint64_t calcAndSetUntransPar(NuclearFamily *theFam, int startIndex,
+				      int lastAssignedMarker,
+				      uint64_t lastIVFlip, uint64_t ivFlippable,
+				      bool lastIVSet, State *curState,
+				      uint64_t lastAssignedIV,
+				      uint64_t lastIVparDiff);
     static void tracePrior(int hmmIndex, int stateIdx);
     static void printStates();
     static void printStates(int hmmIndex);
