@@ -1503,7 +1503,7 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
   // Number of markers since the last one that is heterozygous for only one
   // parent
   int16_t numMarkersSinceOneHetPar = 0;
-  if (_missingPar > 0) {
+  if (_missingPar > 0  && _lastForceInformMarker != _curMarker) {
     checkPenalty(prevState, hetParent, isPI, numMarkersSincePrev, allButOneIV,
 		 applyPenalty, numMarkersSinceNonHetPar,
 		 numMarkersSinceOneHetPar, childrenData);
