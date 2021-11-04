@@ -1503,7 +1503,7 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
   // Number of markers since the last one that is heterozygous for only one
   // parent
   int16_t numMarkersSinceOneHetPar = 0;
-  if (_missingPar > 0  && _lastForceInformMarker != _curMarker) {
+  if (_missingPar > 0 && _lastForceInformMarker != _curMarker) {
     checkPenalty(prevState, hetParent, isPI, numMarkersSincePrev, allButOneIV,
 		 applyPenalty, numMarkersSinceNonHetPar,
 		 numMarkersSinceOneHetPar, childrenData);
@@ -3507,7 +3507,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     // current marker and the subsequent informative marker
     int curMarker = _hmmMarker[hmmIndex];
     uint64_t curIVparDiff =
-      calcAndSetUntransPar(theFam, /*startIndex=*/ curMarker,
+      calcAndSetUntransPar(theFam, /*startMarker=*/ curMarker,
 			   lastAssignedMarker, lastIVFlip, ivFlippable,
 			   lastIVSet, curState, lastAssignedIV,
 			   lastIVparDiff);
@@ -3544,7 +3544,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     // About to finish back tracing; assign the untransmitted parent for the
     // first few markers (before the first informative one)
     if (hmmIndex - curState->prevHMMIndex < 0)
-      calcAndSetUntransPar(theFam, /*startIndex=*/ chrFirstMarker,
+      calcAndSetUntransPar(theFam, /*startMarker=*/ chrFirstMarker,
 			   lastAssignedMarker, lastIVFlip,
 			   /*(first marker) ivFlippable=*/ 0, lastIVSet,
 			   /*first marker state=first assigned state=*/curState,
@@ -3805,7 +3805,7 @@ void Phaser::collectAmbigPrevIdxs(uint64_t curIV, uint64_t curAmbig,
 // In regions where a parent has untransmitted chromosomes, this code determines
 // which of the two is untransmitted and later code sets those alleles as
 // missing. The determination is based on the IV of flanking informative markers
-uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startIndex,
+uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
 				      int lastAssignedMarker,
 				      uint64_t lastIVFlip, uint64_t ivFlippable,
 				      bool lastIVSet, State *curState,
@@ -3823,10 +3823,6 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startIndex,
   // figure into which haplotypes the parents transmitted.
   // start with <ivFlippable> at the current and subsequent marker:
   uint64_t uncertainIV = lastIVFlip | ivFlippable;
-  if (lastIVSet)
-    // if we have a meaningful IV for the subsequent marker, indicate that the
-    // IV values are uncertain for any IV values that are flipped between them
-    uncertainIV |= curState->iv ^ lastAssignedIV;
 
   uint64_t curIVparDiff = (curState->iv & _parBits[0]) ^
 					    ((curState->iv & _parBits[1]) >> 1);
@@ -3836,8 +3832,22 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startIndex,
   for(int p = 0; p < 2; p++)
     certainChildBits1[p] = _childSexes[p] & _parBits[1] & ~uncertainIV;
 
-  for(int m = startIndex; m < lastAssignedMarker; m++) {
+  for(int m = startMarker; m < lastAssignedMarker; m++) {
     untrans = 0;
+
+    if (m == startMarker + 1 && lastIVSet)
+      // if a child received a recombined haplotype, the location of the
+      // recombination is uncertain, and which of the parent's haplotypes s/he
+      // transmitted cannot be determined. As such, we won't include that
+      // child's haplotype when determining whether a given haplotype was
+      // transmitted.
+      // We only apply this for startMarker + 1 and thereafter. The reason is
+      // <startMarker> is informative and we *can* say which parent's haplotype
+      // was transmitted there. That is, the recombination happened _after_
+      // <startMarker>, not _at_ it.
+      // (Corner case is when <startMarker> is <chrFirstMarker>, but there
+      // curState->iv == lastAssignedIV and this next statement has no effect.)
+      uncertainIV |= curState->iv ^ lastAssignedIV;
 
     const PhaseVals &phase = theFam->getPhase(m);
 
