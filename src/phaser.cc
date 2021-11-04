@@ -1395,6 +1395,8 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
 // equivalent numbers of recombinations.
 uint8_t Phaser::isIVambigPar(uint64_t iv, uint64_t ambigIV,
 			     uint64_t unassigned) {
+  if (_onChrX) // only heterozygous parent on chrX is Mom, so no ambiguity
+    return 0;
   uint64_t IVparDiff = (iv & _parBits[0]) ^ ((iv & _parBits[1]) >> 1);
   // Omit differences at standard ambiguous positions. This is relevant in two
   // contexts:
@@ -2565,7 +2567,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 
       if (isPI && IVambigPar && equalStates) {
 	for(int upi = 0; upi < nUpenaltyIters; upi++)
-	  // TODO: below right? Or only want one theStateUpdated?
+	  // TODO: is below right? Or only want one theStateUpdated?
 	  if (theStateUpdated[upi])
 	    theState[upi]->arbitraryPar = 1;
 	break;
