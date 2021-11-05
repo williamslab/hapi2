@@ -1372,7 +1372,7 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
     // 1 << 0, i.e., 1 << newState->parentPhase
     newState->ambigParPhase = (1 << 0) << (2 * newState->hetParent);
     // arbitrary if both parents are missing:
-    newState->arbitraryPar = _missingPar == 3;
+    newState->arbitraryPar = _missingPar == 3 && !_onChrX;
     if (error) {
       newState->error = 1;
       newState->minRecomb = CmdLineOpts::maxNoErrRecombs - 0.5f;
