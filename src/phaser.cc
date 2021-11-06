@@ -857,8 +857,8 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	      // => in this case, either:
 	      //    a. the marker is FI
 	      //    b. the marker is uninformative with Mom being the same
-	      //       homozygous type as the son, and Dad being the opposite
-	      //       homozygous type
+	      //       homozygous type as the son(s), and Dad being the
+	      //       opposite homozygous type
 	      // we'll initially assume that the site is uninformative and then
 	      // during backtracing, check the surrounding IVs to see if it's
 	      // possible for Mom to be FI without introducing more
@@ -3829,13 +3829,13 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
 
   // for checking the special X marker/phase type case below
   uint64_t certainChildBits1[2];
-  for(int p = 0; p < 2; p++)
-    certainChildBits1[p] = _childSexes[p] & _parBits[1] & ~uncertainIV;
+  for(int sex = 0; sex < 2; sex++)
+    certainChildBits1[sex] = _childSexes[sex] & _parBits[1] & ~uncertainIV;
 
   for(int m = startMarker; m < lastAssignedMarker; m++) {
     untrans = 0;
 
-    if (m == startMarker + 1 && lastIVSet)
+    if (m == startMarker + 1 && lastIVSet) {
       // if a child received a recombined haplotype, the location of the
       // recombination is uncertain, and which of the parent's haplotypes s/he
       // transmitted cannot be determined. As such, we won't include that
@@ -3848,6 +3848,10 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
       // (Corner case is when <startMarker> is <chrFirstMarker>, but there
       // curState->iv == lastAssignedIV and this next statement has no effect.)
       uncertainIV |= curState->iv ^ lastAssignedIV;
+      // update which bits are certain to match the change in <uncertainIV>
+      for(int sex = 0; sex < 2; sex++)
+	certainChildBits1[sex] &= ~uncertainIV;
+    }
 
     const PhaseVals &phase = theFam->getPhase(m);
 
@@ -3918,8 +3922,11 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
 	uint64_t shiftedMiss = thisMarkMiss << 1; // shifted to Mom's IV bits
 	bool sonsAllSameIV = false;
 	uint8_t sonsMissing = 0;
+	// when <sonsAllSameIV>, which haplotype (0/1) did the sons all inherit?
 	uint8_t sonsIV = 0;
-	// TODO: comment
+	// We examine only Mom's IV values for those children (sons just below)
+	// where we are certain of the IV. First we check whether they're all
+	// missing and then we determine whether they all have the same IV value
 	if ( (certainChildBits1[0] & ~shiftedMiss) == 0 ) {
 	  // all sons with definite IV values are missing, so the only
 	  // question is whether the daughters all inherited the same allele
@@ -3936,22 +3943,25 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
 	  sonsIV = 0;
 	}
 
-	if (sonsAllSameIV) { // first condition for ambiguity met;
-	  // if this site is ambiguous we use the <untrans> variable to
+	if (sonsAllSameIV || sonsMissing) { // first condition for ambiguity met
+	  // if this site is ambiguous, we use the <untrans> variable to
 	  // capture which parent we don't have information to correctly
-	  // impute: dad is fully _un_imputable, so both his bits are set
-	  // (3):
+	  // impute. In this form of ambiguity, dad is fully _un_imputable, so
+	  // both his bits are set (3):
 	  uint8_t setUntransIfAmbig = 3;
 	  // ... and Mom can only be imputed for the haplotype transmitted to
 	  // the certain sons:
-	  // (Note: this is 3 if <sonsMissing> is false: in this case, Mom's
+	  // (Note: this is 3 if <sonsMissing> is true: in this case, Mom's
 	  // haplotypes are unclear so she is set as fully missing)
 	  uint8_t momSons = 3 - (1 - sonsMissing) * (1 << sonsIV);
 	  setUntransIfAmbig |= momSons << 2;
 
-	  // in order to get into the special case the sons must all have the
-	  // same genotype and therefore the same IV from Mom; now we need
-	  // only check the daughters
+	  // in order to get into the special case, the sons must all have the
+	  // same genotype (or be missing) and therefore the same IV from Mom;
+	  // now we need only check the daughters. First we check whether
+	  // they're all missing and then we determine whether they (a) all have
+	  // the same IV value and (b) have a different IV value than the sons.
+	  // When that is the case, the marker is the special case ambiguous.
 	  if ( (certainChildBits1[1] & ~shiftedMiss) == 0 )
 	    // all daughters with definite IV values are missing, so we have
 	    // an ambiguity
