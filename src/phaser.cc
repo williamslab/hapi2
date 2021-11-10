@@ -931,20 +931,24 @@ bool Phaser::checkForceInform() {
     // Because erroneous sites can interrupt such a region, we adopt a strategy
     // to ensure that these errors don't prevent a forced informative marker
     // from being added:
-    // (1) if <= 2 "informative" (likely erroneous) markers have occurred since
-    // the last force informative marker, we'll use the last force informative
-    // marker as the "anchor" for deciding when to add another one: we'll add a
-    // new marker now.
-    // (2) if > 2 but < 10 "informative" (likely erroneous) markers have
-    // occurred since the last informative marker, we'll reset the "anchor"
-    // marker to the informative site just after its current location.
-    // (3) If >= 10 "informative" markers have occurred, we'll assume we've
-    // left the OHT region and stop tracking the last force inform marker
+    // (1) if <= <forceInformTolerance> "informative" (likely erroneous)
+    // markers have occurred since the last force informative marker, we'll use
+    // the last force informative marker as the "anchor" for deciding when to
+    // add another one: we'll add a new marker now.
+    // (2) if more than <forceInformTolerance> but fewer than
+    // <numInformToBreakForceInform>  "informative" (potentially erroneous)
+    // markers have occurred since the last informative marker, we'll move the
+    // "anchor" marker forward, ignoring <forceInformTolerance> markers and
+    // potentially add a forceInformMarker later.
+    // (3) If >= <numInformToBreakForceInform> "informative" markers have
+    // occurred, we'll assume we've left the OHT region and stop tracking the
+    // last force inform marker
     int numInformSinceLastForce = _hmmMarker.length() - 1 -
 							  _lastForceInformIndex;
     if (numInformSinceLastForce <= CmdLineOpts::forceInformTolerance)
       return /*forceInform=*/ true;
-    else if (numInformSinceLastForce < CmdLineOpts::numInformToBreakForceInform) {
+    else if (numInformSinceLastForce <
+				    CmdLineOpts::numInformToBreakForceInform) {
       _lastForceInformIndex += numInformSinceLastForce -
 					      CmdLineOpts::forceInformTolerance;
       _lastForceInformMarker = _hmmMarker[ _lastForceInformIndex ];
