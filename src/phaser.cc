@@ -1301,7 +1301,7 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates,
 
     // Can have all the informative sites up to <_curMarker> be assigned as
     // erroneous. See comment above the <errorSpanTooLarge> variable for why
-    // this bound is set at it is (interacts with tforced informative markers)
+    // this bound is set at it is (interacts with forced informative markers)
     bool allowAllPrevSitesErrors =
 			  _hmmMarker.length() - 1 <= CmdLineOpts::errorLength &&
 			  _curMarker <= CmdLineOpts::forceInformInterval + 50;
@@ -1380,6 +1380,11 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
     if (error) {
       newState->error = 1;
       newState->minRecomb = CmdLineOpts::maxNoErrRecombs - 0.5f;
+      // Prefer paths that include a smaller number of markers indicated as
+      // erroneous; do this by very slightly adjusting the error term depending
+      // on the number of markers being spanned
+      // Note: there are _hmm.length() - 1 markers before this one
+      newState-> minRecomb += 0.01f * (_hmm.length() - 1);
     }
     else {
       newState->error = 0;
@@ -2464,9 +2469,14 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       if (_phaseMethod == PHASE_MINREC) {
 	totalRecombs = prevState->minRecomb + numRecombs[0];
 
-	if (prevHMMIndex > 1)
+	if (prevHMMIndex > 1) {
 	  // state is > 1 index back => error state: apply penalty
 	  totalRecombs += CmdLineOpts::maxNoErrRecombs - 0.5f;
+	  // Prefer paths that include a smaller number of markers indicated as
+	  // erroneous; do this by very slightly adjusting the error term
+	  // depending on the number of markers being spanned
+	  totalRecombs += 0.01f * (prevHMMIndex - 1);
+	}
 
 	// apply any penalty for only one haplotype transmission
 	totalRecombs += penaltyCount;
