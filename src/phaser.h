@@ -100,8 +100,11 @@ class Phaser {
       for(int c = 0; c < Marker::getNumChroms(); c++)
 	if (Marker::getNumChromMarkers(c) > maxMarkers)
 	  maxMarkers = Marker::getNumChromMarkers(c);
+      // TODO: could save memory by doing fewer than maxMarkers here:
       _hmm.resize(maxMarkers);
       _hmmMarker.resize(maxMarkers);
+      _parInformMarkers[0].resize(maxMarkers / 2);
+      _parInformMarkers[1].resize(maxMarkers / 2);
       _genos.resize(maxMarkers);
       _ambigPrevLists.resize(maxMarkers);
     }
@@ -123,13 +126,14 @@ class Phaser {
 					     uint8_t childGenoTypes,
 					     uint64_t childrenData[5],
 					     uint8_t &homParGeno,
-					     FILE *log);
+					     int firstMarker, FILE *log);
     static int  getMarkerTypeAuto(uint8_t parentGenoTypes,
 				  uint8_t childGenoTypes, uint8_t &homParGeno);
     static int  getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 			       uint64_t childrenData[5], uint8_t &homParGeno,
 			       bool &specialXMT);
-    static void printMarkerType(int mt, FILE *log);
+    static void printMarkerType(int mt, uint8_t parentData, FILE *log);
+    static void printGeno(uint8_t type, FILE *log);
     static bool checkForceInform();
     static void makePartialStates(dynarray<State> &partialStates,
 				  int markerTypes, uint8_t parentData,
@@ -155,12 +159,6 @@ class Phaser {
 			      uint8_t IVambigPar, int numDataChildren,
 			      int numMarkersSincePrev,
 			      bool &zeroRecombsThisPrev);
-    static void checkPenalty(const State *prevState, uint8_t hetParent,
-			     uint8_t isPI, int numMarkersSincePrev,
-			     uint64_t allButOneIV[2], uint8_t applyPenalty[2],
-			     int16_t numMarkersSinceNonHetPar[2],
-			     int16_t &numMarkersSinceOneHetPar,
-			     const uint64_t childrenData[5]);
     static void handlePI(const State *prevState, uint64_t &fullIV,
 			 uint64_t &fullAmbig, uint64_t &recombs,
 			 uint64_t parRecombs[2], uint64_t &propagateAmbig,
@@ -185,16 +183,14 @@ class Phaser {
 				   uint64_t &ambig1Unassigned);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t ambig1Unassigned,
-			     uint64_t recombs, uint64_t allButOneIV[2],
-			     uint8_t applyPenalty[2],
-			     const State *prevState, uint64_t stdAmbigOnlyPrev,
-			     uint64_t ambig1PrevInfo, uint8_t hetParent,
-			     uint8_t homParentGeno, uint8_t initParPhase,
-			     uint8_t altPhaseType, uint8_t prevHMMIndex,
-			     uint32_t prevIndex, uint8_t IVambigPar,
-			     float minMaxRec[2], bool hetParentUndefined,
+			     uint64_t recombs, const State *prevState,
+			     uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
+			     uint8_t hetParent, uint8_t homParentGeno,
+			     uint8_t initParPhase, uint8_t altPhaseType,
+			     uint8_t prevHMMIndex, uint32_t prevIndex,
+			     uint8_t IVambigPar, float minMaxRec[2],
+			     bool hetParentUndefined,
 			     const uint64_t childrenData[5],int numDataChildren,
-			     int16_t numMarkersSinceNonHetPar[2],
 			     int16_t numMarkersSinceOneHetPar,
 			     bool &zeroRecombsThisPrev);
     static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
@@ -213,7 +209,6 @@ class Phaser {
 			       uint8_t altPhaseType, uint8_t ambigLocal,
 			       uint8_t prevHMMIndex, uint32_t prevIndex,
 			       uint8_t IVambigPar, float minMaxRec[2],
-			       int16_t numMarkersSinceNonHetPar[2],
 			       int16_t numMarkersSinceOneHetPar,
 			       float totalRecombs, float totalLikehood,
 			       size_t numRecombs, int lowOrderChildBit);
@@ -258,6 +253,14 @@ class Phaser {
 
     static dynarray< dynarray<State*> > _hmm;
     static dynarray<int> _hmmMarker;
+
+    // During phasing, stores the most recent marker number of a marker that
+    // is guaranteed to be informative for each parent. (Thus a marker that is
+    // only potentially informative for both (PI) is not counted as informative
+    // for both parents.) This is used for determining when to introduce forced
+    // informative markers.
+    static dynarray<int> _parInformMarkers[2];
+
     static dynarray< dynarray<uint32_t> > _ambigPrevLists;
 
     // States at previous markers (up to CmdLineOpts::errorLength previous
@@ -352,9 +355,13 @@ class Phaser {
     // two distinct values only instead of four.
     static uint64_t _ambigFlips[4];
 
-    // For tracking information about genetic distances
+    // The marker number under analysis
     static int _curMarker;
+
     static int _lastInformMarker;
+
+    // What marker number and _hmm index is the most recent forced informative
+    // marker. Assigned -1 when not in a one hap trans region.
     static int _lastForceInformMarker;
     static int _lastForceInformIndex;
 
@@ -363,11 +370,6 @@ class Phaser {
 
     // which parents are missing? Bit vector with bit 0: dad, bit 1: mom
     static uint8_t _missingPar;
-
-    // for looping over missing parents: start from _firstMissP, stay less than
-    // _limitMissP
-    static uint8_t _firstMissP, _limitMissP;
-
 };
 
 struct State {
@@ -428,15 +430,6 @@ struct State {
 
   // Minimum number of recombinations to reach this state
   float minRecomb;
-
-  // For detecting cases where a parent without data has transmitted only one
-  // haplotype to all children. Stores the number of markers (including
-  // uninformative markers) since the last state that can reach this one that
-  // was heterozygous for the parent in question.
-  // This is signed and set to be negative when the penalty associated with
-  // treating the IV as if all children had the same haplotype has been applied.
-  // TODO: rename
-  int16_t numMarkersSinceNonHetPar[2];
 
   // For detecting cases where the children's IVs have been swapped from a
   // parent for which we have data to a parent without data. This manifests
