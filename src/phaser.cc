@@ -241,11 +241,14 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
   // First get the marker type:
   int mt;
   bool specialXMT = false; // see getMarkerTypeX() code for this special type
+  uint8_t imputeUninfHomPar = G_MISS;
+  homParGeno = G_MISS;
   if (!_onChrX) // autosomal?
-    mt = getMarkerTypeAuto(parentGenoTypes, childGenoTypes, homParGeno);
+    mt = getMarkerTypeAuto(parentGenoTypes, childGenoTypes, homParGeno,
+			   imputeUninfHomPar);
   else // X
     mt = getMarkerTypeX(childGenoTypes, parentData, childrenData, homParGeno,
-	specialXMT);
+			imputeUninfHomPar, specialXMT);
   assert(mt > 0 && (mt & ~((1 << MT_N_TYPES) -1) ) == 0);
 
   if (CmdLineOpts::verbose)
@@ -378,6 +381,8 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 	// he is missing) Mom is homozygous for allele 0, this order needs to
 	// be swapped:
 	swapHetChildren = 1;
+      if (imputeUninfHomPar != G_MISS)
+	homParGeno = imputeUninfHomPar;
       theFam->setUninform(_curMarker, parentData, childrenData[4],
 			  childrenData[G_MISS] & _parBits[0], homParGeno,
 			  swapHetChildren);
@@ -423,8 +428,11 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 // both parent's data are missing.
 // For markers that are/may be MT_FI_1 type, also assigns <homParGeno> as the
 // homozygous parent genotype
+// In some circumstances, when a marker has the possibility of being both MT_UN
+// and MT_FI_1, <imputeUninfHomPar> gives the homozgyous genotype of the
+// uncertain parent (i.e., assuming it is MT_UN).
 int Phaser::getMarkerTypeAuto(uint8_t parentGenoTypes, uint8_t childGenoTypes,
-			      uint8_t &homParGeno) {
+			      uint8_t &homParGeno, uint8_t &imputeUninfHomPar) {
   // Only valid values for parentGenoTypes are between 1 and 12 (excluding 7
   // and 11 which are caught below)
   assert(parentGenoTypes >= 1 && parentGenoTypes <= 12);
@@ -577,16 +585,6 @@ int Phaser::getMarkerTypeAuto(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	  return (1 << MT_FI_1) | (1 << MT_PI);
 	case G_HOM0: // one parent homozygous for 0
 	  // can't be partly informative with one homozygous parent:
-//	  homParGeno = G_MISS; // not really sure of other parent's genotype
-	  // though the parent's genotype is potentially heterozygous, we have
-	  // no evidence that that is the case here. As such, in the caller, if
-	  // the marker type includes MT_UN, we generally set the status to
-	  // uninformative. We also wish to impute, as much as possible, any
-	  // missing genotypes in the parent. Here, we know the missing parent
-	  // must have transmitted allele 0 to the children. As such, we impute
-	  // it as carrying that allele, and later (in backtrace()), we
-	  // determine whether both haplotypes were transmitted or only one and
-	  // we print the known information accordingly. IMPUTING
 	  homParGeno = G_HOM0;
 	  return (1 << MT_UN) | (1 << MT_FI_1);
 	case G_HOM1: // one parent homozygous for 1
@@ -613,8 +611,6 @@ int Phaser::getMarkerTypeAuto(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	  return 1 << MT_ERROR;
 	case G_HOM1: // one parent homozygous for 1
 	  // can't be partly informative with one homozygous parent:
-//	  homParGeno = G_MISS; // not really sure of other parent's genotype
-	  // see comment above marked IMPUTING
 	  homParGeno = G_HOM1;
 	  return (1 << MT_UN) | (1 << MT_FI_1);
       }
@@ -673,11 +669,12 @@ int Phaser::getMarkerTypeAuto(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 	  // no hints about phasing with all observed samples heterozygous
 	  return 1 << MT_AMBIG;
 	case G_HOM0: // one parent homozygous for 0
+	  homParGeno = G_HOM0;
+	  imputeUninfHomPar = G_HOM1;
+	  return (1 << MT_UN) | (1 << MT_FI_1);
 	case G_HOM1: // one parent homozygous for 1
-	  // other parent either heterozygous or homozygous for other allele
-	  // gives inverse homozygous genotype relative to <missingType>:
-	  // see comment above marked IMPUTING
-	  homParGeno = G_HOM1 - missingType;
+	  homParGeno = G_HOM1;
+	  imputeUninfHomPar = G_HOM0;
 	  return (1 << MT_UN) | (1 << MT_FI_1);
       }
       break;
@@ -698,23 +695,18 @@ int Phaser::getMarkerTypeAuto(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 // for the parents (if present) or based on the observed genotype values for
 // the children when one or both parent's data are missing
 //
-// Also attempts to impute either the dad's (necessarily) homozyogus genotype
-// or in the case that dad is not missing but mom is, provides the homozygous
-// genotype she has in the case that she is homozygous. Stores this in
-// <homParGeno>. Note that, if Mom is missing, <homParGeno> being non-missing
-// does not imply that she is homozygous, only what her genotype would be if
-// she is homozygous.
-// NOTE: if dad is missing, <homParGeno> is his imputed genotype _except_ if
-// <specialXMT> is true
+// For markers that are/may be MT_FI_1 type, assigns <homParGeno> as dad's
+// homozygous genotype
+// When a marker has the possibility of being both MT_UN and MT_FI_1,
+// <imputeUninfHomPar> gives the homozygous genotype of the mom (who is either
+// heterozygous or homozygous). (Except for <specialXMT> described next.)
 //
 // Also determines whether this is a special marker type that could be fully
 // informative or uninformative and where decisions about how to assign the
 // parents' genotypes get deferred until backtracing.
 int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 			   uint64_t childrenData[5], uint8_t &homParGeno,
-			   bool &specialXMT) {
-  homParGeno = G_MISS; // initially; will attempt to impute below
-
+			   uint8_t &imputeUninfHomPar, bool &specialXMT) {
   // ensure only first four bits set and that dad (lowest order 3 bits) is not
   // heterozygous (enforced in getParentData()):
   assert(parentData <= 15 && (parentData & 3) != G_HET);
@@ -887,17 +879,18 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	    // the children are (note that if both homozygous types are present
 	    // in the children, <momMustBeHet> is assigned above):
 	    if (childrenData[ G_HOM0 ] > 0)
-	      homParGeno = G_HOM0; // Mom's potential genotype
+	      imputeUninfHomPar = G_HOM0; // Mom's potential genotype
 	    else if (childrenData[ G_HOM1 ] > 0)
-	      homParGeno = G_HOM1; // Mom's potential genotype
+	      imputeUninfHomPar = G_HOM1; // Mom's potential genotype
 	    else
 	      // all children het; this implies there's > 0 daughters and they
 	      // would have inherited their dad's allele. That means they
 	      // inherited the opposite allele from their Mom, and if Mom is
 	      // homozyogus, she's homozygous for the opposite allele to dad:
-	      homParGeno = oppDadHomType; // Mom's potential genotype
+	      imputeUninfHomPar = oppDadHomType; // Mom's potential genotype
 	    // Mom could be homozygous but may also be heterozygous with one of
 	    // her alleles untransmitted:
+	    homParGeno = dadGeno;
 	    return (1 << MT_UN) | (1 << MT_FI_1);
 	  }
 	}

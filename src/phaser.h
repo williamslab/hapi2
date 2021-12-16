@@ -128,10 +128,11 @@ class Phaser {
 					     uint8_t &homParGeno,
 					     int firstMarker, FILE *log);
     static int  getMarkerTypeAuto(uint8_t parentGenoTypes,
-				  uint8_t childGenoTypes, uint8_t &homParGeno);
+				  uint8_t childGenoTypes, uint8_t &homParGeno,
+				  uint8_t &imputeUninfHomPar);
     static int  getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 			       uint64_t childrenData[5], uint8_t &homParGeno,
-			       bool &specialXMT);
+			       uint8_t &imputeUninfHomPar, bool &specialXMT);
     static void printMarkerType(int mt, uint8_t parentData, FILE *log);
     static void printGeno(uint8_t type, FILE *log);
     static bool checkForceInform();
