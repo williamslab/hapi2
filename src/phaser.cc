@@ -3023,7 +3023,8 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 	  ambigState->unassigned == _parBits[ oneParMissPar ])
 	firstFullyAssignedIndex[ oneParMissPar ] = prevHmmIndex;
 
-      if (parArbitraryRun && (ivDiffBits > 0 || curState->ambig != it->ambig)) {
+      bool thisStateParFlip = false;
+      if (parArbitraryRun) {
 	// Only remains arbitrary if the following conditions hold (see longer
 	// comment above when parArbtitrary run is first set true)
 	// (1) All differing bits different for both parents?
@@ -3031,15 +3032,18 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 	// (3) The ambig IV values (curState->ambig and it->ambig) match
 	uint64_t ivExpectOppositeBits = ~(ivDiffBits | it->ambig);
 	uint64_t ivValsExpOpp = it->iv & ivExpectOppositeBits;
-	parArbitraryRun = curState->ambig == it->ambig &&
+	thisStateParFlip = curState->ambig == it->ambig &&
 	      ((ivDiffBits >> 1) & _parBits[0]) == (ivDiffBits & _parBits[0]) &&
 	      (((ivValsExpOpp >> 1) ^ ivValsExpOpp) & _parBits[0]) ==
 					  (_parBits[0] & ivExpectOppositeBits);
-	if (!parArbitraryRun)
+	if (!thisStateParFlip &&
+	    (ivDiffBits > 0 || curState->ambig != it->ambig)) {
+	  parArbitraryRun = false;
 	  curArbitraryPar = 1;
+	}
       }
 
-      if (!parArbitraryRun) {
+      if (!thisStateParFlip) {
 	ivFlippable |= ivDiffBits;
 
 	curAmbigParHet |= ambigState->ambigParHet;
