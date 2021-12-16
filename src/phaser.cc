@@ -100,10 +100,10 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
   /////////////////////////////////////////////////////////////////////////////
   // Step 4: HMM analysis finished. Back trace and assign phase!
   if (CmdLineOpts::verbose) {
-    fprintf(log, "  Back tracing... ");
+    fprintf(log, "  Back tracing...\n");
     fflush(log);
   }
-  backtrace(theFam, firstMarker, lastMarker);
+  backtrace(theFam, firstMarker, lastMarker, log);
   if (CmdLineOpts::verbose) {
     fprintf(log, "done\n");
     fflush(log);
@@ -2896,7 +2896,7 @@ void Phaser::rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
 // TODO: go through and comment this and possibly refactor.
 // Back traces and minimum recombinant phase using the states in <_hmm>.
 void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
-		       int chrLastMarker) {
+		       int chrLastMarker, FILE *log) {
   int lastIndex = _hmm.length() - 1;
 
   if (lastIndex < 0)
@@ -2984,6 +2984,9 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
   int prevHmmIndex = -1;
   for(int hmmIndex = lastIndex; hmmIndex >= 0; prevHmmIndex = hmmIndex,
 					       hmmIndex = nextHmmIndex) {
+    if (CmdLineOpts::verbose)
+      fprintf(log, "    Marker %d, hmmIndex %d:", _hmmMarker[ hmmIndex ],
+	      hmmIndex);
     nextHmmIndex = hmmIndex - 1; // modified when there are error states
     State *curState = _hmm[hmmIndex][curStateIdx];
 
@@ -3011,6 +3014,8 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     // to <_prevIdxSet>.
     for(state_set_iter it = _curBTAmbigSet->begin(); it !=_curBTAmbigSet->end();
 									it++) {
+      if (CmdLineOpts::verbose)
+	fprintf(log, " %d", it->stateIdx);
       State *ambigState = _hmm[hmmIndex][ it->stateIdx ];
       uint64_t ivDiffBits = curState->iv ^ it->iv;
 
@@ -3309,6 +3314,9 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     _curBTAmbigSet = _prevBTAmbigSet;
     _prevBTAmbigSet = tmp;
     _prevBTAmbigSet->clear();
+
+    if (CmdLineOpts::verbose)
+      fprintf(log, "\n");
   }
 
   if (assignOneHapTrans) {

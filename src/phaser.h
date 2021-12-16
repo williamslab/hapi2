@@ -222,7 +222,7 @@ class Phaser {
 					  float minMaxRec[2],
 					  int numChildren);
     static void backtrace(NuclearFamily *theFam, int chrFirstMarker,
-			  int chrLastMarker);
+			  int chrLastMarker, FILE *log);
     static uint32_t findMinStates(dynarray<State*> &theStates);
     static void deleteStates(dynarray<State*> &theStates);
     static void propagateBackIV(uint64_t curIV, uint64_t curAmbig,
