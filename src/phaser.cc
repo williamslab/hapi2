@@ -2960,7 +2960,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
   uint64_t oneHapTransOutlierIV = 0;
 
   // if we're missing data for only one parent, which is it?
-  uint8_t oneParMissPar = -1;
+  int8_t oneParMissPar = -1;
   if (_missingPar > 0 && _missingPar < 3)
     oneParMissPar = _missingPar - 1;
 
@@ -3156,8 +3156,8 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 	// xor:
 	// Note: must shift the phase types for <homParent> and <hetParent> to
 	// their respective positions in the 2-bit <phaseType>.
-	uint8_t homParent = oneParMissPar;
-	uint8_t phaseType = ((oneHapTransHap ^ homGenoKind) << homParent) |
+	int8_t homParent = oneParMissPar;
+	int8_t phaseType = ((oneHapTransHap ^ homGenoKind) << homParent) |
 		    (_hmm[hmmIndex][curStateIdx]->parentPhase << hetParent);
 	// (Note: shifting by 4 bits to get to the initial bit that stores the
 	// both parent het phase types)
@@ -3320,9 +3320,9 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
   }
 
   if (assignOneHapTrans) {
-    uint8_t homParent = oneParMissPar;
-    uint8_t hetParent = 1 - oneParMissPar;
-    uint8_t untransHap = 1 - oneHapTransHap;
+    int8_t homParent = oneParMissPar;
+    int8_t hetParent = 1 - oneParMissPar;
+    int8_t untransHap = 1 - oneHapTransHap;
     // have 4 untransParBits: first two for parent 0, second two for parent 1
     // we shift to the appropriate parent with << (2 * homParent)
     // either bit 0 or bit 1 of the given parent is untransmitted, and
