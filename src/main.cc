@@ -430,7 +430,11 @@ void getFamiliesToBePhased(FILE * log, dynarray<NuclearFamily *> &toBePhased) {
   for(NuclearFamily::fam_ht_iter iter = NuclearFamily::familyIter();
 			       iter != NuclearFamily::familyIterEnd(); iter++) {
     NuclearFamily *theFam = iter->second;
-    if (theFam->numChildren() > 1) {
+    // at least 2 children or data for one of the parents (i.e., one person
+    // families cannot be phased)
+    if (theFam->numChildren() > 1 ||
+	theFam->_parents->first->hasData() ||
+	theFam->_parents->second->hasData()) {
       bool shouldPhase = true; // initially assume
 
       int childrenWithData = 0;

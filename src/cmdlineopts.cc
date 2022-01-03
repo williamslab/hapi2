@@ -296,8 +296,8 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	    perror("strtol");
 	  exit(2);
 	}
-	if (minNumChildrenData < 2) {
-	  fprintf(stderr, "ERROR: min_child option must be 2 or greater\n");
+	if (minNumChildrenData < 1) {
+	  fprintf(stderr, "ERROR: min_child option must be positive\n");
 	  haveGoodArgs = false;
 	}
 	break;
