@@ -211,10 +211,10 @@ class Phaser {
 			       uint8_t prevHMMIndex, uint32_t prevIndex,
 			       uint8_t IVambigPar, float minMaxRec[2],
 			       int16_t numMarkersSinceOneHetPar,
-			       float totalRecombs, float totalLikehood,
+			       uint32_t totalRecombs, float totalLikehood,
 			       size_t numRecombs, int lowOrderChildBit);
     static int8_t decideOptimalState(State *theState, const State *prevState,
-				     uint8_t prevHMMIndex, float totalRecombs,
+				     uint8_t prevHMMIndex,uint32_t totalRecombs,
 				     float totalLikelihood,
 				     size_t newRecombs);
     static void updateAmbigPrev(State *theState, uint32_t prevIndex,
@@ -430,7 +430,15 @@ struct State {
   uint8_t  ambigPrev;  // fits in 2 bits
 
   // Minimum number of recombinations to reach this state
-  float minRecomb;
+  // In fact, this is 10 times the number of recombinations, with an error
+  // state penalty of
+  // * <CmdLineOpts::maxNoErrRecombs> * 10 - 5  PLUS
+  // * 1 * <number of markers in the state path>
+  // This is a hacky way to get floating point number error penalties. It was
+  // implemented as a float, but imprecisions made this imprecise (a state path
+  // would get chosen over one with an equivalent number of recombinations due
+  // to imprecison).
+  uint32_t minRecomb;
 
   // For detecting cases where the children's IVs have been swapped from a
   // parent for which we have data to a parent without data. This manifests
