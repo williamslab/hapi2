@@ -371,6 +371,8 @@ class Phaser {
 
     // which parents are missing? Bit vector with bit 0: dad, bit 1: mom
     static uint8_t _missingPar;
+    static uint8_t _firstMissP;
+    static uint8_t _limitMissP;
 };
 
 struct State {

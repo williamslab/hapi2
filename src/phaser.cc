@@ -33,6 +33,8 @@ int      Phaser::_lastForceInformMarker;
 int      Phaser::_lastForceInformIndex;
 bool     Phaser::_onChrX;
 uint8_t  Phaser::_missingPar;
+uint8_t  Phaser::_firstMissP;
+uint8_t  Phaser::_limitMissP;
 
 extern uint8_t swap01Phase[4][16];
 extern uint8_t swap2Phase[4][16];
@@ -146,6 +148,17 @@ void Phaser::initPhaseState(NuclearFamily *theFam) {
 
   // force parents to be missing according to command-line options:
   _missingPar |= CmdLineOpts::forceMissingParBits;
+
+  // for looping over missing parents for one hap trans assignment
+  // analyze parent 0 if bit 0 in _missingPar is 1; otherwise start looping
+  // from parent 1 (result of this is either 0 or 1):
+  _firstMissP = 1 - (_missingPar & 1);
+  // don't analyze parent 0 (the dad) on the X chromosome: only has one hap
+  // the following will flip 0 to 1 iff _firstMissP == 0 and _onChrX == 1
+  _firstMissP ^= (~_firstMissP) & _onChrX;
+  // analyze parent 1 if bit 1 in _missingPar is 1; otherwise shouldn't iterate
+  // to 1 (result of this is either 1 or 2):
+  _limitMissP = (_missingPar >> 1) + 1;
 
   // alternating bits set starting with bit 0 then bit 2, ...
   uint64_t allBitsSet = ~0ul; // initially: fewer depending on numChildren
@@ -2954,14 +2967,9 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
   // haplotype transmission only? This is used to liberally make such
   // assignments at the beginning and end of a chromosome where the IV is
   // potentially consistent with one hap trans
-  bool assignOneHapTrans = false;
-  uint8_t oneHapTransHap = 0;
-  uint64_t oneHapTransOutlierIV = 0;
-
-  // if we're missing data for only one parent, which is it?
-  int8_t oneParMissPar = -1;
-  if (_missingPar > 0 && _missingPar < 3)
-    oneParMissPar = _missingPar - 1;
+  bool assignOneHapTrans[2] = { false, false };
+  uint8_t oneHapTransHap[2] = { 0, 0 };
+  uint64_t oneHapTransOutlierIV[2] = { 0, 0 };
 
   // Number of recombinations in <curState> relative to <prevState> below
   uint16_t numRecombs; // TODO: optimization: do we want this?
@@ -2983,9 +2991,11 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
   int prevHmmIndex = -1;
   for(int hmmIndex = lastIndex; hmmIndex >= 0; prevHmmIndex = hmmIndex,
 					       hmmIndex = nextHmmIndex) {
-    if (CmdLineOpts::verbose)
+    if (CmdLineOpts::verbose) {
       fprintf(log, "    Marker %d, hmmIndex %d:", _hmmMarker[ hmmIndex ],
 	      hmmIndex);
+      fflush(log);
+    }
     nextHmmIndex = hmmIndex - 1; // modified when there are error states
     State *curState = _hmm[hmmIndex][curStateIdx];
 
@@ -3018,9 +3028,11 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
       State *ambigState = _hmm[hmmIndex][ it->stateIdx ];
       uint64_t ivDiffBits = curState->iv ^ it->iv;
 
-      if (oneParMissPar >= 0 && firstFullyAssignedIndex[ oneParMissPar ] < 0 &&
-	  ambigState->unassigned == _parBits[ oneParMissPar ])
-	firstFullyAssignedIndex[ oneParMissPar ] = prevHmmIndex;
+      for (uint8_t p = _firstMissP; p < _limitMissP; p++) {
+	if (firstFullyAssignedIndex[p] < 0 &&
+					  ambigState->unassigned == _parBits[p])
+	  firstFullyAssignedIndex[p] = prevHmmIndex;
+      }
 
       bool thisStateParFlip = false;
       if (parArbitraryRun) {
@@ -3091,80 +3103,78 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
       }
     }
 
-    // Decide whether to assign one hap trans (never assign one hap trans for
-    // dads on chrX)
-    // TODO: deal with _missingPar == 3
-    if (oneParMissPar >= 0 && (oneParMissPar == 1 || !_onChrX)) {
-      if (!assignOneHapTrans) {
+    // Decide whether to assign one hap trans for each missing data parent
+    // TODO: can this assign one hap trans for dads on chrX?
+    for (uint8_t p = _firstMissP; p < _limitMissP; p++) {
+      if (!assignOneHapTrans[p]) {
 	// search for potential OHT starting point
 
 	if (hmmIndex == lastIndex || // always assign one hap trans at end ...
 	    // ... and beginning of a chromosome (the beginning of the
 	    // chromosome is completed after the backtracing loop)
-	    firstFullyAssignedIndex[ oneParMissPar ] >= 0 ||
+	    firstFullyAssignedIndex[p] >= 0 ||
 	    curState->prevHMMIndex == hmmIndex + 1) {
 	  // detect which haplotype was transmitted:
-	  uint64_t parHap =_hmm[hmmIndex][curStateIdx]->iv &
-							_parBits[oneParMissPar];
-	  uint64_t oppParHap = parHap ^ _parBits[oneParMissPar];
+	  uint64_t parHap = _hmm[hmmIndex][curStateIdx]->iv & _parBits[p];
+	  uint64_t oppParHap = parHap ^ _parBits[p];
 
 	  if ((parHap & (parHap - 1)) == 0) { // test for 1 bit set
-	    assignOneHapTrans = true;
-	    oneHapTransOutlierIV = parHap;
-	    oneHapTransHap = 0; // transmitted haplotype is 0
+	    assignOneHapTrans[p] = true;
+	    oneHapTransOutlierIV[p] = parHap;
+	    oneHapTransHap[p] = 0; // transmitted haplotype is 0
 	  }
 	  else if ((oppParHap & (oppParHap - 1)) == 0) { // test all but 1 set
-	    assignOneHapTrans = true;
-	    oneHapTransOutlierIV = oppParHap;
-	    oneHapTransHap = 1; // transmitted haplotype is 1
+	    assignOneHapTrans[p] = true;
+	    oneHapTransOutlierIV[p] = oppParHap;
+	    oneHapTransHap[p] = 1; // transmitted haplotype is 1
 	  }
 	}
       }
-    }
 
-    // handle OHT for markers at the end of the chromosome (we handle the
-    // beginning after the backtracing loop)
-    if (assignOneHapTrans && curState->prevHMMIndex != hmmIndex + 1 &&
-	firstFullyAssignedIndex[ oneParMissPar ] < 0) {
-      uint8_t hetParent = _hmm[hmmIndex][curStateIdx]->hetParent;
+      // handle OHT for markers at the end of the chromosome (we handle the
+      // beginning after the backtracing loop)
+      if (assignOneHapTrans[p] && curState->prevHMMIndex != hmmIndex + 1 &&
+	  firstFullyAssignedIndex[p] < 0) {
+	uint8_t hetParent = _hmm[hmmIndex][curStateIdx]->hetParent;
 
-      // has it ended?
-      if (hetParent != 1 - oneParMissPar)
-	assignOneHapTrans = false;
-      else {
-	// can do this by (1) setting <ivFlippable> for the child that has the
-	// outlier haplotype ...
-	ivFlippable |= oneHapTransOutlierIV;
+	// has it ended?
+	if (hetParent != 1 - p)
+	  assignOneHapTrans[p] = false;
+	else {
+	  // can do this by (1) setting <ivFlippable> for the child that has
+	  // the outlier haplotype ...
+	  ivFlippable |= oneHapTransOutlierIV[p];
 
-	// ... (2) indicating the site may be heterozygous for both parents ...
-	curAmbigParHet |= 1 << 2;
+	  // ... (2) indicating the site may be heterozygous for both parents...
+	  curAmbigParHet |= 1 << 2;
 
-	// ... and (3) assigning the phase type for the both parent het case:
-	// the phase type for the both parent het determines which haplotype is
-	// set to be printed (other is set missing); we want this to be
-	// <transHap>.
-	// The homozygous genotype is either 0 or 3, and we'll divide by 3 to
-	// get a boolean:
-	// Note: on the X chromosome, <homParentGeno> can be missing, which
-	// leads to phaseType == 0. This is OK: that parent (the dad) will have
-	// both alleles missing and his phase won't matter.
-	uint8_t homGenoKind = _hmm[hmmIndex][curStateIdx]->homParentGeno / 3;
-	// If the phase type is 0, when the genotype is heterozygous,
-	// haplotype 0 is allele 0, and haplotype 1 is allele 1. Whichever
-	// haplotype is the same as homGenoKind will be printed (non-missing).
-	// So, if <homGenoKind> == 0 and <transHap> == 0, we want the phase type
-	// to be the same as <transHap>. Same if <homGenoKind> == 0 and
-	// <transHap> == 1.
-	// The reverse is true when <homGenoKind> == 1. So it suffices to
-	// xor:
-	// Note: must shift the phase types for <homParent> and <hetParent> to
-	// their respective positions in the 2-bit <phaseType>.
-	int8_t homParent = oneParMissPar;
-	int8_t phaseType = ((oneHapTransHap ^ homGenoKind) << homParent) |
-		    (_hmm[hmmIndex][curStateIdx]->parentPhase << hetParent);
-	// (Note: shifting by 4 bits to get to the initial bit that stores the
-	// both parent het phase types)
-	curAmbigParPhase |= 1 << (4 + phaseType);
+	  // ... and (3) assigning the phase type for the both parent het case:
+	  // the phase type for the both parent het determines which haplotype
+	  // is set to be printed (other is set missing); we want this to be
+	  // <transHap>.
+	  // The homozygous genotype is either 0 or 3, and we'll divide by 3 to
+	  // get a boolean:
+	  // Note: on the X chromosome, <homParentGeno> can be missing, which
+	  // leads to phaseType == 0. This is OK: that parent (the dad) will
+	  // have both alleles missing and his phase won't matter.
+	  uint8_t homGenoKind = _hmm[hmmIndex][curStateIdx]->homParentGeno / 3;
+	  // If the phase type is 0, when the genotype is heterozygous,
+	  // haplotype 0 is allele 0, and haplotype 1 is allele 1. Whichever
+	  // haplotype is the same as homGenoKind will be printed
+	  // (non-missing).  So, if <homGenoKind> == 0 and <transHap> == 0, we
+	  // want the phase type to be the same as <transHap>. Same if
+	  // <homGenoKind> == 0 and <transHap> == 1.
+	  // The reverse is true when <homGenoKind> == 1. So it suffices to
+	  // xor:
+	  // Note: must shift the phase types for <homParent> and <hetParent>
+	  // to their respective positions in the 2-bit <phaseType>.
+	  int8_t homParent = p;
+	  int8_t phaseType = ((oneHapTransHap[p] ^ homGenoKind) << homParent) |
+		      (_hmm[hmmIndex][curStateIdx]->parentPhase << hetParent);
+	  // (Note: shifting by 4 bits to get to the initial bit that stores
+	  // the both parent het phase types)
+	  curAmbigParPhase |= 1 << (4 + phaseType);
+	}
       }
     }
 
@@ -3324,41 +3334,42 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
       fprintf(log, "\n");
   }
 
-  if (assignOneHapTrans) {
-    int8_t homParent = oneParMissPar;
-    int8_t hetParent = 1 - oneParMissPar;
-    int8_t untransHap = 1 - oneHapTransHap;
-    // have 4 untransParBits: first two for parent 0, second two for parent 1
-    // we shift to the appropriate parent with << (2 * homParent)
-    // either bit 0 or bit 1 of the given parent is untransmitted, and
-    // haplotype 0 is bit 0, and hap 1 is bit 1, so (1 << untransHap) gives this
-    uint8_t untransParBits = (1 << untransHap) << (2 * homParent);
-    int stopMarker = _hmmMarker[ lastInformIndex[ homParent ] ]; 
-    assert(oneParMissPar >= 0); // TODO: handle both par missing
-    if (firstFullyAssignedIndex[ oneParMissPar ] >= 0) {
-      int alternativeStopMarker = _hmmMarker[
-				    firstFullyAssignedIndex[ oneParMissPar ] ];
-      assert(alternativeStopMarker >= stopMarker);
-      stopMarker = alternativeStopMarker;
-    }
-    for(int m = chrFirstMarker; m < stopMarker; m++) {
-      PhaseStatus curStat = theFam->getStatus(m);
-      if (curStat == PHASE_UNINFORM)
-	theFam->setUntransPar(m, untransParBits);
-      else if (curStat == PHASE_OK) {
-	const PhaseVals &phase = theFam->getPhase(m);
-	assert(phase.homParentGeno == G_HOM0 || phase.homParentGeno == G_HOM1);
-	// See the earlier code that handles <assignOneHapTrans> during
-	// backtracing
-	uint8_t homGenoKind = phase.homParentGeno / 3;
-	uint8_t phaseType = ((oneHapTransHap ^ homGenoKind) << homParent) |
-				  (phase.parentPhase << hetParent);
-	theFam->updateOHTVals(m, /*ivFlippable |=*/ oneHapTransOutlierIV,
-			      /*ambigParHet |=*/ 1 << 2,
-			      /*ambigParPhase |=*/ 1 << (4 + phaseType));
+  for (uint8_t p = _firstMissP; p < _limitMissP; p++) {
+    if (assignOneHapTrans[p]) {
+      int8_t homParent = p;
+      int8_t hetParent = 1 - homParent;
+      int8_t untransHap = 1 - oneHapTransHap[p];
+      // have 4 untransParBits: first two for parent 0, second two for parent 1
+      // we shift to the appropriate parent with << (2 * homParent);
+      // either bit 0 or bit 1 of the given parent is untransmitted, and
+      // haplotype 0 is bit 0, and hap 1 is bit 1, so (1 << untransHap) gives
+      // this
+      uint8_t untransParBits = (1 << untransHap) << (2 * homParent);
+      int stopMarker = _hmmMarker[ lastInformIndex[ homParent ] ]; 
+      if (firstFullyAssignedIndex[p] >= 0) {
+	int alternativeStopMarker = _hmmMarker[ firstFullyAssignedIndex[p] ];
+	assert(alternativeStopMarker >= stopMarker);
+	stopMarker = alternativeStopMarker;
       }
-      // TODO: PHASE_X_SPECIAL?
-      // TODO: for PHASE_AMBIG recalculate <bothParHomozyAtAmbig>?
+      for(int m = chrFirstMarker; m < stopMarker; m++) {
+	PhaseStatus curStat = theFam->getStatus(m);
+	if (curStat == PHASE_UNINFORM)
+	  theFam->setUntransPar(m, untransParBits);
+	else if (curStat == PHASE_OK) {
+	  const PhaseVals &phase = theFam->getPhase(m);
+	  assert(phase.homParentGeno == G_HOM0 || phase.homParentGeno ==G_HOM1);
+	  // See the earlier code that handles <assignOneHapTrans> during
+	  // backtracing
+	  uint8_t homGenoKind = phase.homParentGeno / 3;
+	  uint8_t phaseType = ((oneHapTransHap[p] ^ homGenoKind) << homParent) |
+				  (phase.parentPhase << hetParent);
+	  theFam->updateOHTVals(m, /*ivFlippable |=*/ oneHapTransOutlierIV[p],
+				/*ambigParHet |=*/ 1 << 2,
+				/*ambigParPhase |=*/ 1 << (4 + phaseType));
+	}
+	// TODO: PHASE_X_SPECIAL?
+	// TODO: for PHASE_AMBIG recalculate <bothParHomozyAtAmbig>?
+      }
     }
   }
 }
@@ -3694,7 +3705,7 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
 
     // At PHASE_AMBIG sites, for many IV values, we can infer that the parents
     // are in fact homozygous (for opposite alleles). The IV values where this
-    // is not the case are those where both parent transmitted the same
+    // is not the case are those where both parents transmitted the same
     // pattern (or the exact opposite pattern).
     // This is related to isIVambigPar().
     // Are we uncertain about homozygous status?
