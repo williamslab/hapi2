@@ -107,6 +107,8 @@ class Phaser {
       _parInformMarkers[1].resize(maxMarkers / 2);
       _genos.resize(maxMarkers);
       _ambigPrevLists.resize(maxMarkers);
+
+      _stateIdxsToForceFrom.set_empty_key((uint32_t) UINT32_MAX);
     }
     static void run(NuclearFamily *theFam, int chrIdx, FILE *log);
 
@@ -126,7 +128,8 @@ class Phaser {
 					     uint8_t childGenoTypes,
 					     uint64_t childrenData[5],
 					     uint8_t &homParGeno,
-					     int firstMarker, FILE *log);
+					     int firstMarker, bool &forceInform,
+					     FILE *log);
     static int  getMarkerTypeAuto(uint8_t parentGenoTypes,
 				  uint8_t childGenoTypes, uint8_t &homParGeno,
 				  uint8_t &imputeUninfHomPar);
@@ -148,14 +151,21 @@ class Phaser {
 				    const uint64_t childrenData[5]);
     static void makeFullStates(const dynarray<State> &partialStates,
 			       int firstMarker, const uint64_t childrenData[5],
-			       int numChildren, int numMissChildren);
+			       int numChildren, int numMissChildren,
+			       bool forceInform);
     static void addStatesNoPrev(const dynarray<State> &partialStates,
 				int firstMarker, bool error = false);
+    static void addStatesWithPrev(const dynarray<State> &partialStates,
+				  int firstMarker,
+				  const uint64_t childrenData[5],
+				  int numChildren, int numMissChildren,
+				  bool forceInform, int prevHMMIndex,
+				  bool lastPrev, float minMaxRec[2]);
     static uint8_t isIVambigPar(uint64_t iv, uint64_t ambigIV,
 				uint64_t unassigned = 0);
     static void mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
-			      uint32_t prevIdx, const State &curPartial,
-			      float minMaxRec[2],
+			      uint32_t prevIdx, bool error,
+			      const State &curPartial, float minMaxRec[2],
 			      const uint64_t childrenData[5],
 			      uint8_t IVambigPar, int numDataChildren,
 			      int numMarkersSincePrev,
@@ -189,11 +199,10 @@ class Phaser {
 			     uint8_t hetParent, uint8_t homParentGeno,
 			     uint8_t initParPhase, uint8_t altPhaseType,
 			     uint8_t prevHMMIndex, uint32_t prevIndex,
-			     uint8_t IVambigPar, float minMaxRec[2],
+			     bool error, uint8_t IVambigPar, float minMaxRec[2],
 			     bool hetParentUndefined,
 			     const uint64_t childrenData[5],int numDataChildren,
-			     int16_t numMarkersSinceOneHetPar,
-			     bool &zeroRecombsThisPrev);
+			     int numMarkersSincePrev, bool &zeroRecombsThisPrev);
     static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
 					      uint8_t &hetParIsDiff);
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
@@ -209,14 +218,15 @@ class Phaser {
 			       uint8_t homParentGeno, uint8_t curParPhase,
 			       uint8_t altPhaseType, uint8_t ambigLocal,
 			       uint8_t prevHMMIndex, uint32_t prevIndex,
-			       uint8_t IVambigPar, float minMaxRec[2],
+			       bool error, uint8_t IVambigPar,
+			       float minMaxRec[2], int numMarkersSincePrev,
 			       int16_t numMarkersSinceOneHetPar,
 			       uint32_t totalRecombs, float totalLikehood,
 			       size_t numRecombs, int lowOrderChildBit);
     static int8_t decideOptimalState(State *theState, const State *prevState,
-				     uint8_t prevHMMIndex,uint32_t totalRecombs,
-				     float totalLikelihood,
-				     size_t newRecombs);
+				     uint8_t prevHMMIndex, bool error,
+				     uint32_t totalRecombs,
+				     float totalLikelihood, size_t newRecombs);
     static void updateAmbigPrev(State *theState, uint32_t prevIndex,
 				bool newBestPrev);
     static void rmBadStatesCheckErrorFlag(dynarray<State*> &curStates,
@@ -359,7 +369,25 @@ class Phaser {
     // The marker number under analysis
     static int _curMarker;
 
+    // TODO: rm?
     static int _lastInformMarker;
+
+
+
+    // What is the most recent _hmm index for a "real" (non-forced) informative
+    // marker? Assigned -1 when there has not been a forced informative marker
+    // since the last "real" marker
+    static int _lastRealInformIndex;
+    // For introducing forced informative markers, which state indexes need such
+    // a marker?
+    struct equint32_t {
+      bool operator()(uint32_t k1, uint32_t k2) const {
+	return k1 == k2;
+      }
+    };
+    typedef typename google::dense_hash_set<uint32_t, std::hash<uint32_t>,
+					    equint32_t> uint32_set;
+    static uint32_set _stateIdxsToForceFrom;
 
     // What marker number and _hmm index is the most recent forced informative
     // marker. Assigned -1 when not in a one hap trans region.
@@ -441,6 +469,12 @@ struct State {
   // would get chosen over one with an equivalent number of recombinations due
   // to imprecison).
   uint32_t minRecomb;
+
+  // For detecting cases where a parent without data has transmitted only one
+  // haplotype to all children. Stores the number of markers (including
+  // uninformative markers) since the last state that can reach this one that
+  // was heterozygous for the parent in question.
+  int16_t numMarkersSinceNonHetPar[2];
 
   // For detecting cases where the children's IVs have been swapped from a
   // parent for which we have data to a parent without data. This manifests
