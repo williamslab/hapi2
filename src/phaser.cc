@@ -298,6 +298,7 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
     // haplotype to the children. We'll force an informative marker after a
     // sufficiently long stretch so that the inheritance vector reflects the
     // one haplotype transmission status.
+    // TODO: what if this is <specialXMT>?
     if (_onChrX && (_missingPar & 2) && (mt & (1 << MT_FI_1)) &&
 	_curMarker - firstMarker >= CmdLineOpts::forceInformInit) {
       if (checkForceInform()) {
@@ -338,6 +339,24 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 						  CmdLineOpts::forceInformInit)
 	    // too close to most recent informative marker: no forcing
 	    continue;
+
+	  // _May_ want to force an informative marker; check the IV:
+
+	  // TODO: rm?
+	  //       test3 change
+//	  uint64_t parHap = theState->iv & _parBits[p];
+//	  uint64_t oppParHap = parHap ^ _parBits[p];
+//	  // 0, 1 or 2 bits set in parHap or oppParHap?
+//	  // * Only 1 corresponds to either all but one of the children or all
+//	  //   children except one receiving the same haplotype.
+//	  // * Also check for 2 since, in some cases, two children could
+//	  //   recombine near each other and produce a oneHapTrans scenario
+//	  uint8_t numTrans[2] = { (uint8_t) popcount(parHap),
+//				  (uint8_t) popcount(oppParHap) };
+//	  // which pattern (parHap / oppParHap) has min number of 1s (popcount)?
+//	  int minPat = (numTrans[0] <= numTrans[1]) ? 0 : 1;
+//	  if (numTrans[minPat] > 2)
+//	    continue; // too many children would need to recombine: no OHT
 
 	  // One hap trans scenario! add a forced informative marker
 	  if (_missingPar < 3) { // only one parent missing:
@@ -1329,6 +1348,7 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
   // If <forceInform>, want to only consider the previous state indexes in
   // <_stateIdxsToForceFrom>, otherwise we consider all <numPrev> entries
   int numIters = numPrev;
+  // TODO: this is slow -- iterate over _stateIdxsToForceFrom
   dynarray<uint32_t> tempStates; // TODO: slow
   if (forceInform) {
     for(uint32_set::const_iterator it = _stateIdxsToForceFrom.begin();
@@ -2758,6 +2778,8 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
 						CmdLineOpts::forceInformInit)
 	  // arbitrarily pick parent 0 to reset; a later OHT forced informative
 	  // marker for parent 1 will trigger this case if needed
+	  // TODO: should think about this case (when _both_ parents are above
+	  // the threshold) a bit more
 	  p = 0;
 	else if (prevState->numMarkersSinceNonHetPar[0] >=
 						CmdLineOpts::forceInformInit)

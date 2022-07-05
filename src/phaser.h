@@ -387,6 +387,7 @@ class Phaser {
     };
     typedef typename google::dense_hash_set<uint32_t, std::hash<uint32_t>,
 					    equint32_t> uint32_set;
+    // TODO: store a pair? The state index and the parent to force?
     static uint32_set _stateIdxsToForceFrom;
 
     // What marker number and _hmm index is the most recent forced informative
