@@ -2606,14 +2606,16 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
     }
     theState->ambigPrev = 0;
     theState->minRecomb = totalRecombs;
-    theState->numMarkersSinceNonHetPar[0] = numMarkersSincePrev;
-    theState->numMarkersSinceNonHetPar[1] = numMarkersSincePrev;
-    if (prevState->hetParent == 0) // not heterozygous for parent 1: sum prev count
-      theState->numMarkersSinceNonHetPar[1] +=
-					    prevState->numMarkersSinceNonHetPar[1];
-    else if (prevState->hetParent == 1) // not het for parent 0: sum prev count
-      theState->numMarkersSinceNonHetPar[0] +=
-					    prevState->numMarkersSinceNonHetPar[0];
+    // assign <numMarkersSinceNonHetPar>:
+    for (int p = 0; p < 2; p++) {
+      uint8_t parentMissing = (_missingPar >> p) & 1;
+      theState->numMarkersSinceNonHetPar[p] =
+					    parentMissing * numMarkersSincePrev;
+      if (parentMissing && prevState->hetParent == 1 - p)
+	// prevState is not heterozygous for <p>: sum prev count
+	theState->numMarkersSinceNonHetPar[p] +=
+					prevState->numMarkersSinceNonHetPar[p];
+    }
     theState->numMarkersSinceOneHetPar = numMarkersSinceOneHetPar;
     theState->maxLikelihood = totalLikehood;
     // see comment above State::minRecomb (phaser.h) for why it's *10:
@@ -2701,25 +2703,16 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
     // Have two values for <numMarkersSinceNonHetPar[p]>, the one in the state
     // and the one for the new path
     // Will be conservative and use the value closer to 0
-    if (prevState->hetParent == 0) {
-      theState->numMarkersSinceNonHetPar[0] =
-		  min(numMarkersSincePrev, theState->numMarkersSinceNonHetPar[0]);
-      theState->numMarkersSinceNonHetPar[1] =
-		  min(prevState->numMarkersSinceNonHetPar[1] + numMarkersSincePrev,
-		      theState->numMarkersSinceNonHetPar[1]);
-    }
-    else if (prevState->hetParent == 1) {
-      theState->numMarkersSinceNonHetPar[0] =
-		  min(prevState->numMarkersSinceNonHetPar[0] + numMarkersSincePrev,
-		      theState->numMarkersSinceNonHetPar[0]);
-      theState->numMarkersSinceNonHetPar[1] =
-		  min(numMarkersSincePrev, theState->numMarkersSinceNonHetPar[1]);
-    }
-    else {
-      theState->numMarkersSinceNonHetPar[0] =
-		  min(numMarkersSincePrev, theState->numMarkersSinceNonHetPar[0]);
-      theState->numMarkersSinceNonHetPar[1] =
-		  min(numMarkersSincePrev, theState->numMarkersSinceNonHetPar[1]);
+    for (int p = _firstMissP; p < _limitMissP; p++) {
+      if (prevState->hetParent == 1 - p) // prev not het for <p>: sum prev count
+	theState->numMarkersSinceNonHetPar[p] =
+		  min(prevState->numMarkersSinceNonHetPar[p] +
+							  numMarkersSincePrev,
+		      theState->numMarkersSinceNonHetPar[p]);
+      else // prev is het for <p>: only accumulate <numMarkersSincePrev> for <p>
+	theState->numMarkersSinceNonHetPar[p] =
+				    min(numMarkersSincePrev,
+					theState->numMarkersSinceNonHetPar[p]);
     }
     theState->numMarkersSinceOneHetPar =
 	      min(theState->numMarkersSinceOneHetPar, numMarkersSinceOneHetPar);
