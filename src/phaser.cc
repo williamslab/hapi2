@@ -2742,8 +2742,10 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
     // (1) we're getting to this state via an error (necessarily if (2)) and
     // (2) one was just added for this previous state (i.e., between the
     //     current marker and the <prevState>'s marker)
-    // ... reset the number of markers since non het parent to be the number
-    // markers since the last (forced one hap trans) state
+    // ... set the number of markers since non het parent to be
+    // CmdLineOpts::forceInformSeparation less than CmdLineOpts::forceInformInit
+    // That way, we can get another forced informative marker every
+    // CmdLineOpts::forceInformSeparation markers.
     int curHMMIndex = _hmm.length() - 1;
     if (error && _lastRealInformIndex == curHMMIndex - prevHMMIndex) {
       // check that _this_ state was mapped to a forced informative marker
@@ -2770,9 +2772,12 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
 
 	if (prevState->numMarkersSinceNonHetPar[p] >=
 						CmdLineOpts::forceInformInit) {
-	  int numMarkersSinceForced= _curMarker - _hmmMarker[curHMMIndex - 1];
+	  int numMarkersSinceForced = _curMarker - _hmmMarker[curHMMIndex - 1];
+	  int reducedNumSince = CmdLineOpts::forceInformInit -
+				CmdLineOpts::forceInformSeparation +
+				numMarkersSinceForced;
 	  theState->numMarkersSinceNonHetPar[p] =
-				    min(numMarkersSinceForced,
+				    min(reducedNumSince,
 					theState->numMarkersSinceNonHetPar[p]);
 	}
       }
