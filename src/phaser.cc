@@ -326,7 +326,8 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 	     ( (mt & 1 << MT_PI) || (mt & (1 << MT_FI_1)) ) &&
 	     _curMarker - firstMarker >= CmdLineOpts::forceInformInit) {
       int lastHmmIdx = _hmm.length() - 1;
-      for(uint16_t i = 0; i < _hmm[lastHmmIdx].length(); i++) {
+      for(uint16_t i = 0; lastHmmIdx >= 0 &&
+			  i < _hmm[lastHmmIdx].length(); i++) {
 	State *theState = _hmm[lastHmmIdx][i];
 	if ( isIVambigPar( theState->iv, theState->ambig ) )
 	  // no need to force informative markers when the het parent is
@@ -356,6 +357,10 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 	  _stateIdxsToForceFrom.insert(i);
 	}
       }
+      if (lastHmmIdx < 0)
+	// no previous state => no informative marker though we've passed
+	// CmdLineOpts::forceInformInit markers: should force one
+	forceInform = true;
       if (forceInform)
 	_lastRealInformIndex = lastHmmIdx;
     }
