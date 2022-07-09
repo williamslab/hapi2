@@ -23,6 +23,8 @@ Phaser::state_ht                Phaser::_stateHash;
 Phaser::BT_state_set            *Phaser::_curBTAmbigSet;
 Phaser::BT_state_set            *Phaser::_prevBTAmbigSet;
 PhaseMethod                     Phaser::_phaseMethod;
+uint8_t  Phaser::_parentData;
+uint64_t Phaser::_childrenData[5];
 uint64_t Phaser::_parBits[3];
 uint64_t Phaser::_childSexes[2];
 uint64_t Phaser::_flips[4];
@@ -54,28 +56,20 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
 
   // PHASE! Build states/calculate corresponding scores for each marker
   for(_curMarker = firstMarker; _curMarker <= lastMarker; _curMarker++) {
-    uint8_t parentData, parentGenoTypes, homParGeno, childGenoTypes;
-    // Each index in <childrenData> corresponds to a genotype (see the Geno
-    // enumerated type).
-    // The two bits corresponding to each child are set to 1 for the index
-    // of its genotype.
-    // Index 4 (the last value) stores the raw genotype data in PLINK format
-    uint64_t childrenData[5];
+    uint8_t parentGenoTypes, homParGeno, childGenoTypes;
     int numMissChildren = 0; // how many children are missing data?
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 0: get the data for this marker
-    getFamilyData(theFam, parentData, parentGenoTypes, childrenData,
-		  childGenoTypes, numMissChildren);
+    getFamilyData(theFam, parentGenoTypes, childGenoTypes, numMissChildren);
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 1: Determine marker type; handle trivial, ambiguous, or erroneous
     // markers; and check for the need to force an informative marker
     bool forceInform = false; // should we add a forced informative marker?
-    int mt = getMarkerType_prelimAnalyses(theFam, parentData, parentGenoTypes,
-					  childGenoTypes, childrenData,
-					  homParGeno, firstMarker, forceInform,
-					  log);
+    int mt = getMarkerType_prelimAnalyses(theFam, parentGenoTypes,
+					  childGenoTypes, homParGeno,
+					  firstMarker, forceInform, log);
     if (mt < 0)
       continue; // marker processing complete; no further phasing needed
 
@@ -83,7 +77,7 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
     // Step 2: For each consistent marker type, deduce the inheritance vector
     // bits where possible and generate partial states that only have bits
     // defined for the informative parent(s)
-    makePartialStates(partialStates, mt, parentData, homParGeno, childrenData);
+    makePartialStates(partialStates, mt, homParGeno);
 
     ///////////////////////////////////////////////////////////////////////////
     // Step 3: Using states for the previous informative marker, fill in
@@ -91,8 +85,8 @@ void Phaser::run(NuclearFamily *theFam, int chrIdx, FILE *log) {
     // Simultaneously calculate the minimum recombination counts for each state
     // and identify which previous state(s) produce that minimum count (i.e.,
     // perform count-based Viterbi calculation)
-    makeFullStates(partialStates, firstMarker, childrenData,
-		   theFam->numChildren(), numMissChildren, forceInform);
+    makeFullStates(partialStates, firstMarker, theFam->numChildren(),
+		   numMissChildren, forceInform);
 
     // Clean up for next marker
     partialStates.clear();
@@ -207,8 +201,7 @@ void Phaser::initPhaseState(NuclearFamily *theFam) {
 // Looks up and stores the genotype values for the parents and children.
 // For speedy marker type detection, uses bit representation in <*GenoTypes>
 // variables to indicate which genotypes the parents and children have.
-void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
-			   uint8_t &parentGenoTypes, uint64_t childrenData[5],
+void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentGenoTypes,
 			   uint8_t &childGenoTypes, int &numMissChildren) {
   NuclearFamily::par_pair parents = theFam->_parents;
   dynarray<PersonBulk*> &children = theFam->_children;
@@ -220,7 +213,7 @@ void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
 				       parents->second->getBitGeno(_curMarker);
   if (_onChrX && dadData == G_HET) // set males to missing instead of het on X
     dadData = G_MISS;
-  parentData = dadData + (momData << 2);
+  _parentData = dadData + (momData << 2);
 
   // Which of the genotypes are present in the parents/children? There are
   // four possible genotypes, and the first four bits will have a value of 1
@@ -229,15 +222,15 @@ void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
   childGenoTypes = 0;
 
   for(int g = 0; g < 5; g++)
-    childrenData[g] = 0; // note: limited to 32 children (checked above)
+    _childrenData[g] = 0; // note: limited to 32 children (checked above)
 
   int numChildren = children.length();
   for(int c = 0; c < numChildren; c++) {
     uint8_t curChildData = children[c]->getBitGeno(_curMarker);
     if (_onChrX && children[c]->getSex() == 'M' && curChildData == G_HET)
       curChildData = G_MISS; // set males to missing instead of het on X
-    childrenData[ curChildData ] += 3ul << (c*2);
-    childrenData[4] += ((uint64_t) curChildData) << (c*2);
+    _childrenData[ curChildData ] += 3ul << (c*2);
+    _childrenData[4] += ((uint64_t) curChildData) << (c*2);
     childGenoTypes |= 1ul << curChildData; // observed genotype <curChildData>
     // following is 1 when the genotype is 1 (missing), and 0 otherwise
     numMissChildren += (curChildData & 1) & (~curChildData >> 1);
@@ -251,10 +244,8 @@ void Phaser::getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
 // when (on chrX) the Mom is missing data and she has transmitted the same
 // chromosome to all the children.
 int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
-					 uint8_t parentData,
 					 uint8_t parentGenoTypes,
 					 uint8_t childGenoTypes,
-					 uint64_t childrenData[5],
 					 uint8_t &homParGeno,
 					 int firstMarker, bool &forceInform,
 					 FILE *log) {
@@ -267,12 +258,12 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
     mt = getMarkerTypeAuto(parentGenoTypes, childGenoTypes, homParGeno,
 			   imputeUninfHomPar);
   else // X
-    mt = getMarkerTypeX(childGenoTypes, parentData, childrenData, homParGeno,
-			imputeUninfHomPar, specialXMT);
+    mt = getMarkerTypeX(childGenoTypes, homParGeno, imputeUninfHomPar,
+			specialXMT);
   assert(mt > 0 && (mt & ~((1 << MT_N_TYPES) -1) ) == 0);
 
   if (CmdLineOpts::verbose)
-    printMarkerType(mt, parentData, log);
+    printMarkerType(mt, log);
 
   // Can immediately handle erroneous or ambiguous markers:
   if (mt & ((1 << MT_ERROR) | (1 << MT_AMBIG))) {
@@ -280,12 +271,12 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
     assert(mt == (1 << MT_ERROR) || mt == (1 << MT_AMBIG));
     switch(mt) {
       case 1 << MT_ERROR:
-	theFam->setStatus(_curMarker, PHASE_ERROR, parentData,
-			  childrenData[4], childrenData[G_MISS] &_parBits[0]);
+	theFam->setStatus(_curMarker, PHASE_ERROR, _parentData,
+			  _childrenData[4], _childrenData[G_MISS] &_parBits[0]);
 	break;
       case 1 << MT_AMBIG:
-	theFam->setStatus(_curMarker, PHASE_AMBIG, parentData,
-			  childrenData[4], childrenData[G_MISS] &_parBits[0]);
+	theFam->setStatus(_curMarker, PHASE_AMBIG, _parentData,
+			  _childrenData[4], _childrenData[G_MISS] &_parBits[0]);
 	break;
     }
     return -1; // no further phasing needed
@@ -305,13 +296,13 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 	// will add a new marker later, and its index is this:
 	_lastForceInformIndex = _hmmMarker.length();
 	_lastForceInformMarker = _curMarker;
-	if (specialXMT || ((parentData & 3) != G_MISS))
+	if (specialXMT || ((_parentData & 3) != G_MISS))
 	  // going to use this as a fully informative marker; need to store
 	  // dad's genotype in <homParGeno>. Occassionally (specifically in
 	  // the cases that this if statement specifies) <homParGeno> will
 	  // store what Mom's homozygous genotype would be if she is homozygous.
 	  // Get dad's homozygous genotype (or may be missing)
-	  homParGeno = parentData & 3;
+	  homParGeno = _parentData & 3;
 	return mt;
       }
     }
@@ -362,9 +353,9 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 	  if (_missingPar < 3) { // only one parent missing:
 	    uint8_t nonMissParGeno;
 	    if (p == 0)
-	      nonMissParGeno = parentData >> 2;
+	      nonMissParGeno = _parentData >> 2;
 	    else
-	      nonMissParGeno = parentData & 3;
+	      nonMissParGeno = _parentData & 3;
 	    if (nonMissParGeno == G_HOM0 || nonMissParGeno == G_HOM1)
 	      // for uninformative markers, homParGeno may be set to the
 	      // imputed genotype of the missing parent, but for an FI_1
@@ -386,7 +377,7 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 
     if (!specialXMT) { // standard uninformative
       uint8_t swapHetChildren = 0;
-      if ((parentData & 3) == G_HOM1 || ((parentData >> 2) & 3) == G_HOM0)
+      if ((_parentData & 3) == G_HOM1 || ((_parentData >> 2) & 3) == G_HOM0)
 	// The default way to print phase of heterozygous children at
 	// uninformative markers is with allele 0 transmitted by dad and 1
 	// transmitted by mom. When Dad is homozygous for allele 1 or (when
@@ -395,8 +386,8 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 	swapHetChildren = 1;
       if (imputeUninfHomPar != G_MISS)
 	homParGeno = imputeUninfHomPar;
-      theFam->setUninform(_curMarker, parentData, childrenData[4],
-			  childrenData[G_MISS] & _parBits[0], homParGeno,
+      theFam->setUninform(_curMarker, _parentData, _childrenData[4],
+			  _childrenData[G_MISS] & _parBits[0], homParGeno,
 			  swapHetChildren);
       if (forceInform) // force an informative marker?
 	return mt;
@@ -406,8 +397,8 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
       if (homParGeno == G_HOM1) // homParGeno here is for dad
 	// see case just above
 	swapHetChildren = 1;
-      theFam->setSpecialX(_curMarker, parentData, childrenData[4],
-			  childrenData[G_MISS] & _parBits[0], homParGeno,
+      theFam->setSpecialX(_curMarker, _parentData, _childrenData[4],
+			  _childrenData[G_MISS] & _parBits[0], homParGeno,
 			  swapHetChildren);
       // seems like we shouldn't get a forced informative marker in this case;
       // confirm:
@@ -422,8 +413,8 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
     // marker should be informative to get here
     assert( (mt & ( (1 << MT_FI_1) | (1 << MT_PI) )) );
 
-    uint8_t dadGeno = parentData & 3;
-    uint8_t momGeno = parentData >> 2;
+    uint8_t dadGeno = _parentData & 3;
+    uint8_t momGeno = _parentData >> 2;
     if (dadGeno == G_HOM0 || dadGeno == G_HOM1)
       _parInformMarkers[1].append( _curMarker );
     else if (momGeno == G_HOM0 || momGeno == G_HOM1)
@@ -721,14 +712,13 @@ int Phaser::getMarkerTypeAuto(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 // Also determines whether this is a special marker type that could be fully
 // informative or uninformative and where decisions about how to assign the
 // parents' genotypes get deferred until backtracing.
-int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
-			   uint64_t childrenData[5], uint8_t &homParGeno,
+int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t &homParGeno,
 			   uint8_t &imputeUninfHomPar, bool &specialXMT) {
   // ensure only first four bits set and that dad (lowest order 3 bits) is not
   // heterozygous (enforced in getParentData()):
-  assert(parentData <= 15 && (parentData & 3) != G_HET);
+  assert(_parentData <= 15 && (_parentData & 3) != G_HET);
   // ensure sons are not heterozygous (enforced in getParentData()):
-  assert((childrenData[G_HET] & _childSexes[0]) == 0);
+  assert((_childrenData[G_HET] & _childSexes[0]) == 0);
   // ensure <childGenoTypes> is valid; this is bit vector representing which of
   // the four possible genotypes are assigned in the children
   assert(childGenoTypes >= 1 && childGenoTypes <= 15);
@@ -737,9 +727,9 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
   if (childGenoTypes == (1 << G_MISS))
     return 1 << MT_AMBIG;
 
-  uint8_t dadGeno = parentData & 3;
+  uint8_t dadGeno = _parentData & 3;
   uint8_t oppDadHomType = (dadGeno == G_HOM0) ? G_HOM1 : G_HOM0;
-  uint8_t momGeno = (parentData >> 2);
+  uint8_t momGeno = (_parentData >> 2);
   uint8_t oppMomHomType = (momGeno == G_HOM0) ? G_HOM1 : G_HOM0;
   switch (momGeno) {
     case G_HOM0:
@@ -759,7 +749,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	// at markers where the mom is homozygous, sons should not be
 	// homozygous for the opposite allele:
 	uint64_t maleChildHomOppMom =
-				childrenData[ oppMomHomType ] & _childSexes[0];
+				_childrenData[ oppMomHomType ] & _childSexes[0];
 	if (maleChildHomOppMom > 0)
 	  return 1 << MT_ERROR;
 
@@ -767,7 +757,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	  // with both parents homozygous for different alleles, daughters
 	  // should be heterozygous or missing:
 	  uint64_t femaleChildHetGeno =
-	      (childrenData[ G_HET ] | childrenData[G_MISS]) & _childSexes[1];
+	      (_childrenData[ G_HET ] | _childrenData[G_MISS]) & _childSexes[1];
 	  if (femaleChildHetGeno != _childSexes[1])
 	    return 1 << MT_ERROR;
 	}
@@ -775,12 +765,12 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	  // daughters must carry their dad's allele, and even though we don't
 	  // know what it is, they should not be homozygous for opposite
 	  // alleles:
-	  uint64_t femaleChildHom0 = childrenData[ G_HOM0 ] & _childSexes[1];
-	  uint64_t femaleChildHom1 = childrenData[ G_HOM1 ] & _childSexes[1];
+	  uint64_t femaleChildHom0 = _childrenData[ G_HOM0 ] & _childSexes[1];
+	  uint64_t femaleChildHom1 = _childrenData[ G_HOM1 ] & _childSexes[1];
 	  if (femaleChildHom0 > 0 && femaleChildHom1 > 0)
 	    return 1 << MT_ERROR;
 	  else if (femaleChildHom0 > 0 || femaleChildHom1 > 0) {
-	    if ((childrenData[ G_HET ] & _childSexes[1]) > 0)
+	    if ((_childrenData[ G_HET ] & _childSexes[1]) > 0)
 	      // Since Mom is homozygous, all female children should either be
 	      // homozygous for the same genotype or all should be heterozygous
 	      // (or could be missing). Having both types implies a Mendelian
@@ -789,7 +779,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	    // impute dad:
 	    homParGeno = (femaleChildHom0) ? G_HOM0 : G_HOM1;
 	  }
-	  else if ((childrenData[ G_HET ] & _childSexes[1]) > 0)
+	  else if ((_childrenData[ G_HET ] & _childSexes[1]) > 0)
 	    // in this case, all the daughters are heterozygous; that means
 	    // that dad must have the opposite homozygous genotype to Mom.
 	    // impute him:
@@ -813,7 +803,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
       if (dadGeno != G_MISS) {
 	// daughters must carry their dad's allele, so can't be oppDadHomType:
 	uint64_t femaleChildHomOppDad =
-			      childrenData[ oppDadHomType ] & _childSexes[1];
+			      _childrenData[ oppDadHomType ] & _childSexes[1];
 	if (femaleChildHomOppDad != 0)
 	  return 1 << MT_ERROR;
 
@@ -828,8 +818,8 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 
 	// daughters must carry their dad's allele, and even though we don't
 	// know what it is, they should not be homozygous for opposite alleles:
-	uint64_t femaleChildHom0 = childrenData[ G_HOM0 ] & _childSexes[1];
-	uint64_t femaleChildHom1 = childrenData[ G_HOM1 ] & _childSexes[1];
+	uint64_t femaleChildHom0 = _childrenData[ G_HOM0 ] & _childSexes[1];
+	uint64_t femaleChildHom1 = _childrenData[ G_HOM1 ] & _childSexes[1];
 	if (femaleChildHom0 > 0 && femaleChildHom1 > 0)
 	  return 1 << MT_ERROR;
 	else if (femaleChildHom0 > 0 || femaleChildHom1 > 0)
@@ -839,7 +829,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	  // dad's genotype is ambiguous; if there are no sons or they are all
 	  // missing data, it's impossible to phase (Mom is het and all her
 	  // daughters are, too, with no data for sons)
-	  if ( (childrenData[G_MISS] & _childSexes[0]) == _childSexes[0] )
+	  if ( (_childrenData[G_MISS] & _childSexes[0]) == _childSexes[0] )
 	    return 1 << MT_AMBIG;
 	}
 
@@ -867,13 +857,13 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	// ignore that, the following condition is true if either (a) there are
 	// sets of sons of opposite homozygous types or (b) there are daughters
 	// of one type and sons of the other (or both [a] and [b]).
-	bool momMustBeHet = childrenData[ G_HOM0 ] > 0 &&
-			    childrenData[ G_HOM1 ] > 0;
+	bool momMustBeHet = _childrenData[ G_HOM0 ] > 0 &&
+			    _childrenData[ G_HOM1 ] > 0;
 
 	if (dadGeno != G_MISS) {
 	  // daughters must carry their dad's allele, so can't be oppDadHomType:
 	  uint64_t femaleChildHomOppDad =
-			      childrenData[ oppDadHomType ] & _childSexes[1];
+			      _childrenData[ oppDadHomType ] & _childSexes[1];
 	  if (femaleChildHomOppDad != 0)
 	    return 1 << MT_ERROR;
 
@@ -882,8 +872,8 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	  // heterozygous (the homozygous children inherited one allelic type
 	  // and the het daughters necessarily got the other allele from the
 	  // Mom)
-	  momMustBeHet = momMustBeHet || ( childrenData[ dadGeno ] > 0 &&
-			 (childrenData[ G_HET ] & _childSexes[1]) > 0 );
+	  momMustBeHet = momMustBeHet || ( _childrenData[ dadGeno ] > 0 &&
+			 (_childrenData[ G_HET ] & _childSexes[1]) > 0 );
 	  if (momMustBeHet) {
 	    // mom heterozgyous: informative for her
 	    // dad is always uninformative, and him being non-missing ensures
@@ -895,9 +885,9 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	    // if Mom is homozygous, she's homozygous for the same allele as
 	    // the children are (note that if both homozygous types are present
 	    // in the children, <momMustBeHet> is assigned above):
-	    if (childrenData[ G_HOM0 ] > 0)
+	    if (_childrenData[ G_HOM0 ] > 0)
 	      imputeUninfHomPar = G_HOM0; // Mom's potential genotype
-	    else if (childrenData[ G_HOM1 ] > 0)
+	    else if (_childrenData[ G_HOM1 ] > 0)
 	      imputeUninfHomPar = G_HOM1; // Mom's potential genotype
 	    else
 	      // all children het; this implies there's > 0 daughters and they
@@ -917,8 +907,8 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	  // daughters must carry their dad's allele, and even though we don't
 	  // know what it is, they should not be homozygous for opposite
 	  // alleles:
-	  uint64_t femaleChildHom0 = childrenData[ G_HOM0 ] & _childSexes[1];
-	  uint64_t femaleChildHom1 = childrenData[ G_HOM1 ] & _childSexes[1];
+	  uint64_t femaleChildHom0 = _childrenData[ G_HOM0 ] & _childSexes[1];
+	  uint64_t femaleChildHom1 = _childrenData[ G_HOM1 ] & _childSexes[1];
 	  if (femaleChildHom0 > 0 && femaleChildHom1 > 0)
 	    return 1 << MT_ERROR;
 	  else if (femaleChildHom0 > 0 || femaleChildHom1 > 0)
@@ -928,7 +918,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	    // dad's genotype is ambiguous; if there are no sons or they are all
 	    // missing data, it's impossible to phase (Mom may be het and all
 	    // the daughters are het, too, with no data for sons)
-	    if ( (childrenData[G_MISS] & _childSexes[0]) == _childSexes[0] )
+	    if ( (_childrenData[G_MISS] & _childSexes[0]) == _childSexes[0] )
 	      return 1 << MT_AMBIG;
 	  }
 
@@ -936,7 +926,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	  // heterozygous
 	  momMustBeHet = momMustBeHet ||
 			 ( (femaleChildHom0 > 0 || femaleChildHom1 > 0) &&
-			   (childrenData[ G_HET ] & _childSexes[1]) > 0 );
+			   (_childrenData[ G_HET ] & _childSexes[1]) > 0 );
 	  if (momMustBeHet) {
 	    // mom heterozgyous: informative for her
 	    // dad is always uninformative, and we checked above that the
@@ -961,7 +951,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 	      // recombinations
 	      // we'll store the homozygous type dad would have if the marker
 	      // is uninformative (opposite the sons' homozygous type)
-	      homParGeno = ( (childrenData[ G_HOM0 ] & _childSexes[0]) > 0 ) ?
+	      homParGeno = ( (_childrenData[ G_HOM0 ] & _childSexes[0]) > 0 ) ?
 			   G_HOM1 : G_HOM0;
 	      specialXMT = true;
 	    }
@@ -979,7 +969,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
 }
 
 // For use with verbose mode, prints the marker type to the log
-void Phaser::printMarkerType(int mt, uint8_t parentData, FILE *log) {
+void Phaser::printMarkerType(int mt, FILE *log) {
   fprintf(log, "    Marker %d:", _curMarker);
   if (mt == 1 << MT_ERROR)
     fprintf(log, " Mendelian error");
@@ -999,9 +989,9 @@ void Phaser::printMarkerType(int mt, uint8_t parentData, FILE *log) {
       fprintf(log, " Both parents heteterozygous");
   }
   fprintf(log, " dad: ");
-  printGeno((Geno) parentData & 3, log);
+  printGeno((Geno) _parentData & 3, log);
   fprintf(log, " mom: ");
-  printGeno((Geno) parentData >> 2, log);
+  printGeno((Geno) _parentData >> 2, log);
   fprintf(log, "\n");
   fflush(log);
 }
@@ -1083,13 +1073,11 @@ bool Phaser::checkForceInform() {
 // data at the current marker, generates partial states indicating, where
 // known, which allele each parent transmitted to the children.
 void Phaser::makePartialStates(dynarray<State> &partialStates,
-			       int markerTypes, uint8_t parentData,
-			       uint8_t homParGeno,
-			       const uint64_t childrenData[5]) {
+			       int markerTypes, uint8_t homParGeno) {
   int lastIndex = _genos.length();
   _genos.addEmpty();
-  _genos[lastIndex].first = parentData;
-  _genos[lastIndex].second = childrenData[4];
+  _genos[lastIndex].first = _parentData;
+  _genos[lastIndex].second = _childrenData[4];
 
   // Fully informative for one parent:
   if (markerTypes & (1 << MT_FI_1)) {
@@ -1098,29 +1086,26 @@ void Phaser::makePartialStates(dynarray<State> &partialStates,
       // do we have any daughters? and are any non-missing? if so we can try
       // both possibilities for dad's genotype
       if (_childSexes[1] > 0 &&
-		    (childrenData[G_MISS] & _childSexes[1]) != _childSexes[1]) {
+		  (_childrenData[G_MISS] & _childSexes[1]) != _childSexes[1]) {
 	// try both possibilities for dad's (homozygous) genotype
-	makePartialFI1States(partialStates, parentData, /*homParGeno=*/ G_HOM0,
-			     childrenData);
-	makePartialFI1States(partialStates, parentData, /*homParGeno=*/ G_HOM1,
-			     childrenData);
+	makePartialFI1States(partialStates, /*homParGeno=*/ G_HOM0);
+	makePartialFI1States(partialStates, /*homParGeno=*/ G_HOM1);
       }
       else {
 	// no information to impute dad; use a placeholder genotype for him to
 	// get the partial state made and then set his genotype to missing
-	makePartialFI1States(partialStates, parentData, /*homParGeno=*/ G_HOM0,
-			     childrenData);
+	makePartialFI1States(partialStates, /*homParGeno=*/ G_HOM0);
 	partialStates[ partialStates.length() - 1 ].homParentGeno = G_MISS;
       }
     }
     else
-      makePartialFI1States(partialStates, parentData, homParGeno, childrenData);
+      makePartialFI1States(partialStates, homParGeno);
   }
 
   // Partly informative
   if (markerTypes & (1 << MT_PI)) {
     assert( !_onChrX );
-    makePartialPIStates(partialStates, parentData, childrenData);
+    makePartialPIStates(partialStates);
   }
 }
 
@@ -1128,12 +1113,11 @@ void Phaser::makePartialStates(dynarray<State> &partialStates,
 // parent markers (or the states that correspond to this possibility when the
 // parent's genotypes aren't fully known)
 void Phaser::makePartialFI1States(dynarray<State> &partialStates,
-				  uint8_t parentData, uint8_t homParGeno,
-				  const uint64_t childrenData[5]) {
+				  uint8_t homParGeno) {
   // which children are heterozygous or hom1 at this marker? store these.
   // this allows us to modify these values so that the autosomal code works
   // on chrX
-  uint64_t childHetHom1[2] = { childrenData[ G_HET ], childrenData[ G_HOM1 ] };
+  uint64_t childHetHom1[2] = { _childrenData[ G_HET ],_childrenData[ G_HOM1 ] };
 
   // First deal with chrX nuances:
   if (_onChrX) {
@@ -1146,11 +1130,11 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     // Start by getting those sons' bits:
     uint8_t oppDadHomType = (homParGeno == G_HOM0) ? G_HOM1 : G_HOM0;
     uint64_t maleChildHomOppDad =
-				childrenData[ oppDadHomType ] & _childSexes[0];
+				_childrenData[ oppDadHomType ] & _childSexes[0];
     // now we want to clear these sons' bits in their original homozygous
     // genotype; to avoid a conditional we make this a bit complex; our goal is
-    //   childrenData[ oppDadHomType ] ^= maleChildHomOppDad;
-    // but we don't want to change childrenData. First get an indicator of
+    //   _childrenData[ oppDadHomType ] ^= maleChildHomOppDad;
+    // but we don't want to change _childrenData. First get an indicator of
     // whether oppDadHomType is G_HOM1 by getting its first bit:
     uint8_t oppDadIsHom1 = oppDadHomType & 1;
     // now we'll flip, and this will either flip the G_HOM1 value OR the G_HET
@@ -1172,20 +1156,20 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
   }
   // If both parents are missing, we'll make states corresponding to each
   // being heterozygous (other homozygous), consistent with the ambiguity
-  else if (parentData == (G_MISS << 2) + (G_MISS)) {
+  else if (_parentData == (G_MISS << 2) + (G_MISS)) {
     startPar = 0;
     endPar = 1;
   }
   // parent 0 het: either we have data for parent 0 as a het, or we have data
   // for parent 1 as homozygous (or both)
-  else if ((parentData & 3) == G_HET || (parentData >> 2) == G_HOM0 ||
-	   (parentData >> 2) == G_HOM1) {
+  else if ((_parentData & 3) == G_HET || (_parentData >> 2) == G_HOM0 ||
+	   (_parentData >> 2) == G_HOM1) {
     startPar = endPar = 0;
   }
   // parent 1 het:
   else {
-    assert((parentData >> 2) == G_HET || (parentData & 3) == G_HOM0 ||
-	   (parentData & 3) == G_HOM1);
+    assert((_parentData >> 2) == G_HET || (_parentData & 3) == G_HOM0 ||
+	   (_parentData & 3) == G_HOM1);
     startPar = endPar = 1;
   }
 
@@ -1223,11 +1207,11 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
     // X chromosome, we say that the father's bits are all assigned to
     // non-missing children
     newState.unassigned = ( (1-_onChrX) * _parBits[homPar] ) |
-							childrenData[ G_MISS ];
+						      _childrenData[ G_MISS ];
     // on the X chromosome, females' paternal IV values is 0 and males are 1;
     // we use the latter when printing the (hemizygous) males
     newState.iv |= (_onChrX * ( _childSexes[0] & _parBits[0] )) &
-							~childrenData[ G_MISS ];
+						      ~_childrenData[ G_MISS ];
     newState.hetParent = hetPar;
     newState.homParentGeno = homParGeno;
     // Won't assign <parentPhase> field as all partial states have a value of
@@ -1242,9 +1226,7 @@ void Phaser::makePartialFI1States(dynarray<State> &partialStates,
 // Helper for makePartialStates(): applicable to partly informative markers (or
 // the states that correspond to this possibility when the parent's genotypes
 // aren't fully known)
-void Phaser::makePartialPIStates(dynarray<State> &partialStates,
-				 uint8_t parentData,
-				 const uint64_t childrenData[5]) {
+void Phaser::makePartialPIStates(dynarray<State> &partialStates) {
   // Add space for a new (partial) state. The use of addEmpty() allows us to
   // get a reference to the state stored here and enables direct writing to
   // the stored state (no need to copy values in)
@@ -1259,13 +1241,13 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
   // This also assumes that all heterozygous children received haplotype 0
   // from parent 0 and haplotype 1 from parent 1, but this will be changed
   // when making full states.
-  newState.iv = childrenData[ 4 ] & ~childrenData[ G_MISS ];
+  newState.iv = _childrenData[ 4 ] & ~_childrenData[ G_MISS ];
   // Potentially ambiguous bits are those where the child is heterozygous.
   // If this is the first state on this chromosome, these are ambiguous and
   // their phase is resolved by later markers.
-  newState.ambig = childrenData[ G_HET ];
+  newState.ambig = _childrenData[ G_HET ];
   // Have full transmission information except for children with missing data:
-  newState.unassigned = childrenData[ G_MISS ];
+  newState.unassigned = _childrenData[ G_MISS ];
   newState.hetParent = 2; // both parents heterozygous
   newState.homParentGeno = G_MISS;
   // Won't assign <parentPhase> field as all partial states have a value of
@@ -1279,9 +1261,8 @@ void Phaser::makePartialPIStates(dynarray<State> &partialStates,
 // generates all full states. Stores these as the last value in <_hmm> and
 // stores the marker index <marker> that these states apply to in <_hmmMarker>.
 void Phaser::makeFullStates(const dynarray<State> &partialStates,
-			    int firstMarker, const uint64_t childrenData[5],
-			    int numChildren, int numMissChildren,
-			    bool forceInform) {
+			    int firstMarker, int numChildren,
+			    int numMissChildren, bool forceInform) {
   // make a new entry in <_hmm>
   // called "Abs" for "absolute" to distinguish from the <prevHMMIndex> field
   // in States
@@ -1310,8 +1291,8 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates,
   for (int mapFromHMMIndex = prevHMMIndexAbs; mapFromHMMIndex >= stopHMMIndex;
 							      mapFromHMMIndex--)
     // only consider errors on last iteration of this loop
-    addStatesWithPrev(partialStates, firstMarker, childrenData, numChildren,
-		      numMissChildren, forceInform, mapFromHMMIndex,
+    addStatesWithPrev(partialStates, firstMarker, numChildren, numMissChildren,
+		      forceInform, mapFromHMMIndex,
 		      /*lastPrev=*/ mapFromHMMIndex == stopHMMIndex,
 		      minMaxRec);
 
@@ -1331,10 +1312,10 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates,
 // the previous markers are at a "real" informative marker, while the others
 // are for forced informative markers.
 void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
-			       int firstMarker, const uint64_t childrenData[5],
-			       int numChildren, int numMissChildren,
-			       bool forceInform, int prevHMMIndexAbs,
-			       bool lastPrev, float minMaxRec[2]) {
+			       int firstMarker, int numChildren,
+			       int numMissChildren, bool forceInform,
+			       int prevHMMIndexAbs, bool lastPrev,
+			       float minMaxRec[2]) {
   int mostRecentHMMIndex = _hmm.length() - 2;
 
   dynarray<State*> &prevStates = _hmm[prevHMMIndexAbs];
@@ -1429,7 +1410,7 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
       mapPrevToFull(prevState,
 		    /*prevHMMIndex=*/ mostRecentHMMIndex - prevHMMIndexAbs + 1,
 		    prevIdx, /*error=*/ false, curPartial, minMaxRec,
-		    childrenData, IVambigPar,
+		    IVambigPar,
 		    /*numDataChildren=*/numChildren - numMissChildren,
 		    _curMarker - _hmmMarker[ prevHMMIndexAbs ],
 		    zeroRecombsThisPrev);
@@ -1504,7 +1485,7 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
 	mapPrevToFull(errorPathPrevState,
 		      /*prevHMMIndex=*/ mostRecentHMMIndex - errorHMMIndex + 1,
 		      errorPrevIdx, /*error=*/ true, curPartial, minMaxRec,
-		      childrenData, IVambigPar,
+		      IVambigPar,
 		      /*numDataChildren=*/numChildren - numMissChildren,
 		      _curMarker - _hmmMarker[ errorHMMIndex ],
 		      zeroRecombsThisPrev);
@@ -1590,9 +1571,24 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
         newState->numMarkersSinceNonHetPar[p] = numMarkersToCur;
     }
 
-    // PI states are heterozygous for both parents, so count is 1 when <isPI>
-    // and zero otherwise (is a one het par marker in that case)
-    newState->numMarkersSinceOneHetPar = isPI;
+    // Track the number of markers since the last one that is heterozygous for
+    // only one parent (only need do this if only one parent is missing data)
+    int16_t numMarkersSinceOneHetPar = 0;
+    if ( (_missingPar == 1 || _missingPar == 2) ) {
+      // PI states are heterozygous for both parents, so count if <isPI> or
+      // in a corner case (see comment near definition of <fakeOneHetPar> below)
+      uint64_t fullIVnonMiss = newState->iv & ~_childrenData[G_MISS];
+      uint8_t nonHetPar = (1 - newState->hetParent); // assuming !isPI
+      bool fakeOneHetPar = (_missingPar == (1 << newState->hetParent)) &&
+			   ((_parentData >> (nonHetPar * 2)) & 3) == G_MISS &&
+			   ( ( fullIVnonMiss & _parBits[nonHetPar]) == 0 ||
+			     (~fullIVnonMiss & _parBits[nonHetPar]) == 0 );
+      if (isPI || fakeOneHetPar)
+	// Limit the impact of long stretches of uninformative markers on this
+	// penalty: count a stretch as no more than 10 markers:
+	numMarkersSinceOneHetPar = min(numMarkersToCur, 10);
+    }
+    newState->numMarkersSinceOneHetPar = numMarkersSinceOneHetPar;
     // initially probability of log(1) == 0; note that in principle this
     // should be log(1/N), where N is the number of initial states, but really
     // all that encodes is that they have equal probability, so setting this
@@ -1678,7 +1674,6 @@ uint8_t Phaser::isIVambigPar(uint64_t iv, uint64_t ambigIV,
 void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 			   uint32_t prevIdx, bool error,
 			   const State &curPartial, float minMaxRec[2],
-			   const uint64_t childrenData[5],
 			   uint8_t IVambigPar, int numDataChildren,
 			   int numMarkersSincePrev, bool &zeroRecombsThisPrev) {
   uint8_t hetParent = curPartial.hetParent;
@@ -1761,8 +1756,7 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 
   if (isPI) { // MT_PI state
     handlePI(prevState, fullIV, fullAmbig, recombs, parRecombs, propagateAmbig,
-	     defaultPhaseHasRecomb, childPrevUnassigned, unambigHetRecombs,
-	     childrenData);
+	     defaultPhaseHasRecomb, childPrevUnassigned, unambigHetRecombs);
 
     bool parUndefined[2];
     for (int p = 0; p < 2; p++) {
@@ -1775,7 +1769,7 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
   else {
     // Fully informative marker: only ambiguous bits are those where a child
     // was ambiguous in the previous state and missing data at this marker
-    fullAmbig = childrenData[G_MISS] & prevState->ambig;
+    fullAmbig = _childrenData[G_MISS] & prevState->ambig;
 
     if (_missingPar == 3 && hetParent == 1 && prevState->unassigned > 0 &&
 	isIVambigPar(fullIV, fullAmbig, fullUnassigned))
@@ -1829,7 +1823,7 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 	       prevState, stdAmbigOnlyPrev, ambig1PrevInfo, hetParent,
 	       curPartial.homParentGeno, /*initParPhase=default phase=*/ 0,
 	       altPhaseType, prevHMMIndex, prevIdx, error, IVambigPar,
-	       minMaxRec, hetParentUndefined, childrenData, numDataChildren,
+	       minMaxRec, hetParentUndefined, numDataChildren,
 	       numMarkersSincePrev, zeroRecombsThisPrev);
 
   // For MT_PI states, have 1 or 2 more states to examine:
@@ -1845,8 +1839,8 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
     ///////////////////////////////////////////////////////////////////////////
     // Generate the <fullIV> and <fullAmbig> values for parent 0 flipped:
     // (Note: <fullUnassigned> does not change)
-    flipPIVals(fullIV, fullAmbig, childrenData, propagateAmbig,
-	       unambigHetRecombs, childPrevUnassigned, defaultPhaseHasRecomb);
+    flipPIVals(fullIV, fullAmbig, propagateAmbig, unambigHetRecombs,
+	       childPrevUnassigned, defaultPhaseHasRecomb);
     recombs = (prevState->iv ^ fullIV) & ~prevState->unassigned;
     parRecombs[0] = (recombs & _parBits[0]) * 3;
     parRecombs[1] = ((recombs & _parBits[1]) >> 1) * 3;
@@ -1859,7 +1853,7 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 		       ambig1PrevInfo, ambig1Unassigned);
 
     // Following is not failing, so comment out for efficiency:
-//    assert((recombs & childrenData[G_HET] & (childPrevUnassigned[0] |
+//    assert((recombs & _childrenData[G_HET] & (childPrevUnassigned[0] |
 //						 childPrevUnassigned[1])) == 0);
 
     ///////////////////////////////////////////////////////////////////////////
@@ -1870,8 +1864,7 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 		 /*homParentGeno=*/G_MISS, /*initParPhase=parent 0 flip=*/1,
 		 /*altPhaseType=parent 1 flip=*/ 2, prevHMMIndex, prevIdx,
 		 error, IVambigPar, minMaxRec, /*hetParentUndefined=*/ false,
-		 childrenData, numDataChildren, numMarkersSincePrev,
-		 zeroRecombsThisPrev);
+		 numDataChildren, numMarkersSincePrev, zeroRecombsThisPrev);
   }
 }
 
@@ -1882,8 +1875,7 @@ void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
 		      uint64_t parRecombs[2], uint64_t &propagateAmbig,
 		      uint64_t &defaultPhaseHasRecomb,
 		      uint64_t childPrevUnassigned[2],
-		      uint64_t unambigHetRecombs[4],
-		      const uint64_t childrenData[5]) {
+		      uint64_t unambigHetRecombs[4]) {
   // Set both bits for any children that have unassigned values for each
   // parent in the previous state:
   childPrevUnassigned[0] = (prevState->unassigned & _parBits[0]) * 3;
@@ -1917,7 +1909,7 @@ void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
   // both homologs on these children, we must sometimes flip the <fullIV>
   // values. Also, a single recombination is ambiguous and must be accounted
   // for. See below.
-  uint64_t unambigAssignedHets = childrenData[G_HET] &
+  uint64_t unambigAssignedHets = _childrenData[G_HET] &
 					~(prevStdAmbig | eitherPrevUnassigned);
   calcHetChildPIRecombs(parRecombs, unambigAssignedHets, unambigHetRecombs);
 
@@ -1931,14 +1923,14 @@ void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
   // Determine which children are ambiguous:
   // (1) Some from the previous marker (when het/missing here):
   propagateAmbig =
-		(childrenData[G_MISS] | childrenData[G_HET]) & prevState->ambig;
+	      (_childrenData[G_MISS] | _childrenData[G_HET]) & prevState->ambig;
   // (2) Near the beginning of the chromosome, if a child has not had either
   //     <iv> value assigned previously and is het here, it is ambiguous. We
   //     can choose either phase assignment without affecting the number of
   //     recombinations.
   //   (We put this together with propagateAmbig so that it gets reused for the
   //   alternate phase types addressed in flipPIVals().)
-  propagateAmbig |= childrenData[G_HET] & bothPrevUnassigned;
+  propagateAmbig |= _childrenData[G_HET] & bothPrevUnassigned;
   // (3) Some newly ambiguous due to recombinations from one parent:
   uint64_t newAmbigChildren = unambigHetRecombs[1] | unambigHetRecombs[2];
   // (4) New ambig1 children:
@@ -1949,7 +1941,7 @@ void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
   //   (We put this together with propagateAmbig so that it gets reused for the
   //   alternate phase types addressed in flipPIVals().)
   uint64_t onePrevUnassigned = eitherPrevUnassigned - bothPrevUnassigned;
-  uint64_t hetChildPrevUnassign = childrenData[G_HET] & onePrevUnassigned;
+  uint64_t hetChildPrevUnassign = _childrenData[G_HET] & onePrevUnassigned;
   propagateAmbig |= hetChildPrevUnassign & _parBits[0]; // new ambig1 children
 
   fullAmbig = newAmbigChildren | propagateAmbig;
@@ -1969,7 +1961,7 @@ void Phaser::handlePI(const State *prevState, uint64_t &fullIV,
 
   // Following is not failing, so comment out for efficiency:
 //  assert(recombs == ((prevState->iv ^ fullIV) & ~prevState->unassigned &
-//			~(childrenData[G_HET] &
+//			~(_childrenData[G_HET] &
 //			   (childPrevUnassigned[0] | childPrevUnassigned[1]))));
 }
 
@@ -2004,7 +1996,7 @@ void Phaser::calcHetChildPIRecombs(const uint64_t parRecombs[2],
 // We base this on the values passed in as arguments, including the <fullIV>
 // and <fullAmbig> values generated for the default phase.
 void Phaser::flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
-			const uint64_t childrenData[5], uint64_t propagateAmbig,
+			uint64_t propagateAmbig,
 			const uint64_t unambigHetRecombs[4],
 			const uint64_t childPrevUnassigned[2],
 			uint64_t defaultPhaseHasRecomb) {
@@ -2012,11 +2004,11 @@ void Phaser::flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
   // Get the flipped <fullIV> value:
 
   // <iv> value is the same as the default for all missing data children:
-  uint64_t newFullIV = fullIV & childrenData[G_MISS];
+  uint64_t newFullIV = fullIV & _childrenData[G_MISS];
   // flip the transmitted haplotype for parent 0 for all homozygous
   // children
   newFullIV |= (fullIV ^ _parBits[0]) &
-				  (childrenData[G_HOM0] | childrenData[G_HOM1]);
+				(_childrenData[G_HOM0] | _childrenData[G_HOM1]);
   // For heterozygous children (only remaining children to be defined), the
   // value in <newFullIV> is 00. This is the value we want for all standard
   // ambiguous children -- it is the canonical value for looking up in
@@ -2035,7 +2027,7 @@ void Phaser::flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
   // so that there's no recombination from parent 1. Alternatively, if the
   // default phase has no recombination and parent 1 is unassigned, we'd also
   // like a value of 00 so that there's no recombination from parent 0:
-  uint64_t flipPartlyUnassigned = childrenData[G_HET] &
+  uint64_t flipPartlyUnassigned = _childrenData[G_HET] &
 			    ((childPrevUnassigned[0] & ~defaultPhaseHasRecomb) |
 			     (childPrevUnassigned[1] & defaultPhaseHasRecomb));
   newFullIV ^= flipPartlyUnassigned;
@@ -2166,8 +2158,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			  uint8_t initParPhase, uint8_t altPhaseType,
 			  uint8_t prevHMMIndex, uint32_t prevIndex,
 			  bool error, uint8_t IVambigPar, float minMaxRec[2],
-			  bool hetParentUndefined,
-			  const uint64_t childrenData[5], int numDataChildren,
+			  bool hetParentUndefined, int numDataChildren,
 			  int numMarkersSincePrev, bool &zeroRecombsThisPrev) {
   // How many iterations of the loop? See various comments below.
   int numIter = 2;
@@ -2190,29 +2181,48 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   // Track the number of markers since the last one that is heterozygous for
   // only one parent (only need do this if only one parent is missing data)
   int16_t numMarkersSinceOneHetPar = 0;
-  if (isPI && _missingPar > 0 && _missingPar < 3 &&
+  if ( (_missingPar == 1 || _missingPar == 2) &&
 				    prevState->numMarkersSinceOneHetPar >= 0) {
     // Case where we have data for one parent; attempt to detect switch in
     // which parent is which: this manifests as long stretches where both
-    // parents are heterozygous
+    // parents are heterozygous. Thus, we count markers below (in
+    // <numMarkersSinceOneHetPar>) if <isPI> or in a corner case:
 
-    // Limit the impact of long stretches of uninformative markers on this
-    // penalty: count a stretch as no more than 10 markers:
-    numMarkersSinceOneHetPar = prevState->numMarkersSinceOneHetPar +
+    // If a parent that has genotype data is temporarily missing data (i.e., at
+    // this marker), then if the IV has that parent as transmitting all the same
+    // haplotype, a PI state and a state where the parent is homozygous will be
+    // indistinguishable. We don't want scuh a non-PI state to interrupt a run
+    // of PI state counts, since we lack real information about the parent.
+    //
+    // Thus we define <fakeOneHetPar> below according to the conditions in the
+    // above paragraph: (a) the (fully) missing data parent is heterozygous
+    // (b) the other parent (<nonHetPar>) is missing locally, and (c) that
+    // parent transmitted the same haplotype to all non-missing children.
+    uint64_t fullIVnonMiss = fullIV & ~_childrenData[G_MISS];
+    uint8_t nonHetPar = (1 - hetParent); // assuming !isPI
+    bool fakeOneHetPar = (_missingPar == (1 << hetParent)) &&
+			 ((_parentData >> (nonHetPar * 2)) & 3) == G_MISS &&
+			 ( ( fullIVnonMiss & _parBits[nonHetPar]) == 0 ||
+			   (~fullIVnonMiss & _parBits[nonHetPar]) == 0 );
+    if (isPI || fakeOneHetPar) {
+      // Limit the impact of long stretches of uninformative markers on this
+      // penalty: count a stretch as no more than 10 markers:
+      numMarkersSinceOneHetPar = prevState->numMarkersSinceOneHetPar +
 						  min(numMarkersSincePrev, 10);
-    // NOTE: it may not be necessary, and we currently don't check, but
-    //       this penalty should really only apply if the commented out
-    //       conditional below holds. It's complicated by ambiguous IVs
-    //       and the fact that the four phase options for this PI state
-    //       behave differently with respect to this check
-//    uint8_t dataPar = 2 - _missingPar; // the parent with data
-//    uint8_t dataParIV = fullIV & _parBits[dataPar];
-//    if (!( dataParIV == _parBits[ dataPar ] || dataParIV == 0 )) {
-//      // If the data parent transmitted the same haplotype to all children,
-//      // then all sites where the children are heterozygous will be PI, so
-//      // there shouldn't be a penalty. Here, we've inverted those cases and
-//      // there should be a penalty:
-//    }
+      // NOTE: it may not be necessary, and we currently don't check, but
+      //       this penalty should really only apply if the commented out
+      //       conditional below holds. It's complicated by ambiguous IVs
+      //       and the fact that the four phase options for this PI state
+      //       behave differently with respect to this check
+//      uint8_t dataPar = 2 - _missingPar; // the parent with data
+//      uint8_t dataParIV = fullIV & _parBits[dataPar];
+//      if (!( dataParIV == _parBits[ dataPar ] || dataParIV == 0 )) {
+//        // If the data parent transmitted the same haplotype to all children,
+//        // then all sites where the children are heterozygous will be PI, so
+//        // there shouldn't be a penalty. Here, we've inverted those cases and
+//        // there should be a penalty:
+//      }
+    }
   }
 
   uint8_t ohpPenalty = 0;
@@ -2279,11 +2289,11 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     numIter = 1;
   }
   else if ( ((1-isPI) &&
-	     (childrenData[G_MISS] & _parBits[hetParent] & ~fullUnassigned) == 0
+	     (_childrenData[G_MISS] & _parBits[hetParent] & ~fullUnassigned) ==0
 	     && stdAmbigOnlyPrev == 0 && ambig1Unassigned == 0) ||
-       (isPI && (stdAmbigOnlyPrev & childrenData[G_HET]) == 0
-	     && ((childrenData[G_MISS] & ~fullUnassigned) |
-					  childrenData[G_HET]) == fullAmbig)) {
+       (isPI && (stdAmbigOnlyPrev & _childrenData[G_HET]) == 0
+	     && ((_childrenData[G_MISS] & ~fullUnassigned) |
+					  _childrenData[G_HET]) == fullAmbig)) {
     numIter = 1;
 
     // Determine which phase assignment has minimal recombinations before the
@@ -2415,7 +2425,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       // not get flipped: they're either unambigous and constrained by
       // <prevState->iv> or they're ambiguous and should remain the same to
       // stick with the convention used in <_stateHash>.
-      uint64_t noFlipBits = childrenData[G_MISS] | (childrenData[G_HET] * isPI);
+      uint64_t noFlipBits = _childrenData[G_MISS] |
+			    (_childrenData[G_HET] * isPI);
       uint64_t flipVal = _parBits[ hetParent ] & ~noFlipBits;
       // When the child was ambiguous previously and <isPI> == 0, we need to
       // flip the propagated <iv> values from the homozygous parent, so:

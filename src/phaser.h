@@ -118,55 +118,42 @@ class Phaser {
     //////////////////////////////////////////////////////////////////
 
     static void initPhaseState(NuclearFamily *theFam);
-    static void getFamilyData(NuclearFamily *theFam, uint8_t &parentData,
-			      uint8_t &parentGenoTypes,
-			      uint64_t childrenData[5], uint8_t &childGenoTypes,
-			      int &numMissChildren);
+    static void getFamilyData(NuclearFamily *theFam, uint8_t &parentGenoTypes,
+			      uint8_t &childGenoTypes, int &numMissChildren);
     static int  getMarkerType_prelimAnalyses(NuclearFamily *theFam,
-					     uint8_t parentData,
 					     uint8_t parentGenoTypes,
 					     uint8_t childGenoTypes,
-					     uint64_t childrenData[5],
 					     uint8_t &homParGeno,
 					     int firstMarker, bool &forceInform,
 					     FILE *log);
     static int  getMarkerTypeAuto(uint8_t parentGenoTypes,
 				  uint8_t childGenoTypes, uint8_t &homParGeno,
 				  uint8_t &imputeUninfHomPar);
-    static int  getMarkerTypeX(uint8_t childGenoTypes, uint8_t parentData,
-			       uint64_t childrenData[5], uint8_t &homParGeno,
+    static int  getMarkerTypeX(uint8_t childGenoTypes, uint8_t &homParGeno,
 			       uint8_t &imputeUninfHomPar, bool &specialXMT);
-    static void printMarkerType(int mt, uint8_t parentData, FILE *log);
+    static void printMarkerType(int mt, FILE *log);
     static void printGeno(uint8_t type, FILE *log);
     static bool checkForceInform();
     static void makePartialStates(dynarray<State> &partialStates,
-				  int markerTypes, uint8_t parentData,
-				  uint8_t homParGeno,
-				  const uint64_t childrenData[5]);
+				  int markerTypes, uint8_t homParGeno);
     static void makePartialFI1States(dynarray<State> &partialStates,
-				     uint8_t parentData, uint8_t homParGeno,
-				     const uint64_t childrenData[5]);
-    static void makePartialPIStates(dynarray<State> &partialStates,
-				    uint8_t parentData,
-				    const uint64_t childrenData[5]);
+				     uint8_t homParGeno);
+    static void makePartialPIStates(dynarray<State> &partialStates);
     static void makeFullStates(const dynarray<State> &partialStates,
-			       int firstMarker, const uint64_t childrenData[5],
-			       int numChildren, int numMissChildren,
-			       bool forceInform);
+			       int firstMarker, int numChildren,
+			       int numMissChildren, bool forceInform);
     static void addStatesNoPrev(const dynarray<State> &partialStates,
 				int firstMarker, bool error = false);
     static void addStatesWithPrev(const dynarray<State> &partialStates,
-				  int firstMarker,
-				  const uint64_t childrenData[5],
-				  int numChildren, int numMissChildren,
-				  bool forceInform, int prevHMMIndex,
-				  bool lastPrev, float minMaxRec[2]);
+				  int firstMarker, int numChildren,
+				  int numMissChildren, bool forceInform,
+				  int prevHMMIndex, bool lastPrev,
+				  float minMaxRec[2]);
     static uint8_t isIVambigPar(uint64_t iv, uint64_t ambigIV,
 				uint64_t unassigned = 0);
     static void mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 			      uint32_t prevIdx, bool error,
 			      const State &curPartial, float minMaxRec[2],
-			      const uint64_t childrenData[5],
 			      uint8_t IVambigPar, int numDataChildren,
 			      int numMarkersSincePrev,
 			      bool &zeroRecombsThisPrev);
@@ -175,13 +162,11 @@ class Phaser {
 			 uint64_t parRecombs[2], uint64_t &propagateAmbig,
 			 uint64_t &defaultPhaseHasRecomb,
 			 uint64_t childPrevUnassigned[2],
-			 uint64_t unambigHetRecombs[4],
-			 const uint64_t childrenData[5]);
+			 uint64_t unambigHetRecombs[4]);
     static void calcHetChildPIRecombs(const uint64_t parRecombs[2],
 				      const uint64_t unambigHets,
 				      uint64_t unambigHetRecombs[4]);
     static void flipPIVals(uint64_t &fullIV, uint64_t &fullAmbig,
-			   const uint64_t childrenData[5],
 			   uint64_t propagateAmbig,
 			   const uint64_t unambigHetRecombs[4],
 			   const uint64_t childPrevUnassigned[2],
@@ -200,8 +185,7 @@ class Phaser {
 			     uint8_t initParPhase, uint8_t altPhaseType,
 			     uint8_t prevHMMIndex, uint32_t prevIndex,
 			     bool error, uint8_t IVambigPar, float minMaxRec[2],
-			     bool hetParentUndefined,
-			     const uint64_t childrenData[5],int numDataChildren,
+			     bool hetParentUndefined, int numDataChildren,
 			     int numMarkersSincePrev, bool &zeroRecombsThisPrev);
     static inline uint8_t calcAmbigParHetBits(uint8_t hetPar1, uint8_t hetPar2,
 					      uint8_t &hetParIsDiff);
@@ -345,6 +329,15 @@ class Phaser {
 
     // What type of phasing are we doing?
     static PhaseMethod _phaseMethod;
+
+    // The genotypes of dad (bits 0, 1) and mom (bits 2, 3)
+    static uint8_t _parentData;
+    // Each index in <_childrenData> corresponds to a genotype (see the Geno
+    // enumerated type).
+    // The two bits corresponding to each child are set to 1 in <_childrenData>
+    // only in the index of its genotype (e.g., G_HOM0).
+    // Index 4 (the last value) stores the raw genotype data in PLINK format
+    static uint64_t _childrenData[5];
 
     // Inheritance vector bits corresponding to parent 0 and 1 (indexed).
     // Index 2 corresponds to all inheritance vector bits set to 1.
