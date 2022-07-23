@@ -350,19 +350,6 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 //	    continue; // too many children would need to recombine: no OHT
 
 	  // One hap trans scenario! add a forced informative marker
-	  if (_missingPar < 3) { // only one parent missing:
-	    uint8_t nonMissParGeno;
-	    if (p == 0)
-	      nonMissParGeno = _parentData >> 2;
-	    else
-	      nonMissParGeno = _parentData & 3;
-	    if (nonMissParGeno == G_HOM0 || nonMissParGeno == G_HOM1)
-	      // for uninformative markers, homParGeno may be set to the
-	      // imputed genotype of the missing parent, but for an FI_1
-	      // marker, this needs to be set as:
-	      homParGeno = nonMissParGeno;
-	  }
-
 	  forceInform = true;
 	  _stateIdxsToForceFrom.insert(i);
 	}
@@ -389,8 +376,24 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
       theFam->setUninform(_curMarker, _parentData, _childrenData[4],
 			  _childrenData[G_MISS] & _parBits[0], homParGeno,
 			  swapHetChildren);
-      if (forceInform) // force an informative marker?
+      if (forceInform) { // force an informative marker?
+	if (_missingPar < 3) { // only one parent missing:
+	  // Need <homParGeno> to be the genotype of the non-missing parent.
+	  // Its current value may be <imputeUninfHomPar>, which applies only
+	  // if the type is MT_UN. Forcing an informative marker is
+	  // inconsistent with this, so we'll get the value directly from
+	  // <_parentData>.
+	  uint8_t missParent = _missingPar >> 1;
+	  uint8_t nonMissParGeno;
+	  if (missParent == 0)
+	    nonMissParGeno = _parentData >> 2; // mom's genotype
+	  else
+	    nonMissParGeno = _parentData & 3;  // dad's genotype
+	  if (nonMissParGeno != G_MISS)
+	    homParGeno = nonMissParGeno;
+	}
 	return mt;
+      }
     }
     else { // special X chromosome case
       uint8_t swapHetChildren = 0;
