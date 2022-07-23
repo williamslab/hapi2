@@ -35,7 +35,6 @@ int   CmdLineOpts::endPos = INT_MAX;
 int   CmdLineOpts::forceWrite = 0;
 int   CmdLineOpts::maxNoErrRecombs = DEFAULT_NO_ERROR_MAX;
 uint8_t CmdLineOpts::errorLength = DEFAULT_ERROR_LENGTH;
-int   CmdLineOpts::oneHapTransThreshold = 250;
 int   CmdLineOpts::bothParHetThreshold = 75;
 int   CmdLineOpts::forceInformInit = 150;
 int   CmdLineOpts::forceInformSeparation = 50;

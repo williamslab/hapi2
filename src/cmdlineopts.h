@@ -99,9 +99,6 @@ class CmdLineOpts {
     // errors)
     static uint8_t errorLength;
 
-    // For detecting when a parent has transmitted only one haplotype
-    static int oneHapTransThreshold;
-
     // For detecting when the children's IV values have switched from a parent
     // with data to a parent without data.
     static int bothParHetThreshold;
