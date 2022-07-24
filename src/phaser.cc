@@ -1580,12 +1580,15 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
     if ( (_missingPar == 1 || _missingPar == 2) ) {
       // PI states are heterozygous for both parents, so count if <isPI> or
       // in a corner case (see comment near definition of <fakeOneHetPar> below)
-      uint64_t fullIVnonMiss = newState->iv & ~_childrenData[G_MISS];
-      uint8_t nonHetPar = (1 - newState->hetParent); // assuming !isPI
-      bool fakeOneHetPar = (_missingPar == (1 << newState->hetParent)) &&
-			   ((_parentData >> (nonHetPar * 2)) & 3) == G_MISS &&
-			   ( ( fullIVnonMiss & _parBits[nonHetPar]) == 0 ||
-			     (~fullIVnonMiss & _parBits[nonHetPar]) == 0 );
+      uint64_t fullIV = newState->iv;
+      uint8_t hetParent = newState->hetParent;
+      uint8_t nonHetPar = (1 - hetParent); // assuming !isPI
+      bool fakeOneHetPar = ((_parentData >> (nonHetPar * 2)) & 3) == G_MISS &&
+	    ( ( fullIV & ~_childrenData[G_MISS] & _parBits[nonHetPar]) == 0 ||
+	      (~fullIV & ~_childrenData[G_MISS] & _parBits[nonHetPar]) == 0 );
+      fakeOneHetPar = fakeOneHetPar && ( (_missingPar == (1 << hetParent)) ||
+	  (( fullIV & _parBits[nonHetPar]) != 0 &&
+	   (~fullIV & _parBits[nonHetPar]) != 0) );
       if (isPI || fakeOneHetPar)
 	// Limit the impact of long stretches of uninformative markers on this
 	// penalty: count a stretch as no more than 10 markers:
@@ -2191,22 +2194,29 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // parents are heterozygous. Thus, we count markers below (in
     // <numMarkersSinceOneHetPar>) if <isPI> or in a corner case:
 
-    // If a parent that has genotype data is temporarily missing data (i.e., at
-    // this marker), then if the IV has that parent as transmitting all the same
-    // haplotype, a PI state and a state where the parent is homozygous will be
-    // indistinguishable. We don't want scuh a non-PI state to interrupt a run
-    // of PI state counts, since we lack real information about the parent.
+    // In addition to PI markers, at a FI1 state at a site that is (locally or
+    // genome-wide) missing data for the het parent: if the IV has the non-het
+    // parent transmitting all the same haplotype, a PI state and the FI1 state
+    // will be indistinguishable. We don't want such a non-PI state to
+    // interrupt a run of PI state counts.
     //
     // Thus we define <fakeOneHetPar> below according to the conditions in the
-    // above paragraph: (a) the (fully) missing data parent is heterozygous
-    // (b) the other parent (<nonHetPar>) is missing locally, and (c) that
+    // above paragraph: (a) the (<nonHetPar>) is missing, and (b) that
     // parent transmitted the same haplotype to all non-missing children.
-    uint64_t fullIVnonMiss = fullIV & ~_childrenData[G_MISS];
     uint8_t nonHetPar = (1 - hetParent); // assuming !isPI
-    bool fakeOneHetPar = (_missingPar == (1 << hetParent)) &&
-			 ((_parentData >> (nonHetPar * 2)) & 3) == G_MISS &&
-			 ( ( fullIVnonMiss & _parBits[nonHetPar]) == 0 ||
-			   (~fullIVnonMiss & _parBits[nonHetPar]) == 0 );
+    bool fakeOneHetPar = ((_parentData >> (nonHetPar * 2)) & 3) == G_MISS &&
+	    ( ( fullIV & ~_childrenData[G_MISS] & _parBits[nonHetPar]) == 0 ||
+	      (~fullIV & ~_childrenData[G_MISS] & _parBits[nonHetPar]) == 0 );
+    // ... also we don't want this case to trigger if we're in a OHT region for
+    // the fully missing data parent. Thus we also require either that (a) the
+    // fully missing data parent is heterozygous (implying we're not in a OHT
+    // region, since in a OHT region the missing data parent has ambiguous
+    // heterozygosity), or (b) that the non-het parent (necessarily fully
+    // missing since this is an OR case) is _not_ in an OHT state once we
+    // include _all_ children (even those who may be locally missing).
+    fakeOneHetPar = fakeOneHetPar && ( (_missingPar == (1 << hetParent)) ||
+	  (( fullIV & _parBits[nonHetPar]) != 0 &&
+	   (~fullIV & _parBits[nonHetPar]) != 0) );
     if (isPI || fakeOneHetPar) {
       // Limit the impact of long stretches of uninformative markers on this
       // penalty: count a stretch as no more than 10 markers:
