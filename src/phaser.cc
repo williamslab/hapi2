@@ -2236,6 +2236,13 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 //        // there should be a penalty:
 //      }
     }
+    else {
+      // don't just reset <numMarkersSinceOneHetPar> to 0 when we encounter one
+      // non-PI state. That state could be the result of an error. Instead,
+      // decrement by 10, capping at 0
+      numMarkersSinceOneHetPar = max(0,
+				     prevState->numMarkersSinceOneHetPar - 10);
+    }
   }
 
   uint8_t ohpPenalty = 0;
