@@ -1291,13 +1291,18 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates,
   // rmBadStatesCheckErrorFlag().
   float minMaxRec[2] = { FLT_MAX, 0 };
 
+  // Count of the number of error states that get added by addStatesWithPrev()
+  // below. We don't map these to the current marker (they are potential error
+  // paths to the next and subsequent markers)
+  int numPrevErrorStatesAdded = 0;
+
   for (int mapFromHMMIndex = prevHMMIndexAbs; mapFromHMMIndex >= stopHMMIndex;
 							      mapFromHMMIndex--)
     // only consider errors on last iteration of this loop
     addStatesWithPrev(partialStates, firstMarker, numChildren, numMissChildren,
 		      forceInform, mapFromHMMIndex,
 		      /*lastPrev=*/ mapFromHMMIndex == stopHMMIndex,
-		      minMaxRec);
+		      minMaxRec, numPrevErrorStatesAdded);
 
   // reset "real" informative marker index
   if (_lastRealInformIndex >= 0 && !forceInform) {
@@ -1318,13 +1323,13 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
 			       int firstMarker, int numChildren,
 			       int numMissChildren, bool forceInform,
 			       int prevHMMIndexAbs, bool lastPrev,
-			       float minMaxRec[2]) {
+			       float minMaxRec[2],
+			       int &numPrevErrorStatesAdded) {
   int mostRecentHMMIndex = _hmm.length() - 2;
 
   dynarray<State*> &prevStates = _hmm[prevHMMIndexAbs];
   uint32_t numPrev = prevStates.length();
   int numPartial = partialStates.length();
-  int numPrevErrorStatesAdded = 0;
 
   //////////////////////////////////////////////////////////////////////////////
   // Map previous states to current states (i.e., at this marker) with no errors
@@ -1448,8 +1453,8 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
   // informative markers, so we ensure <lastPrev> is true.
   if (CmdLineOpts::maxNoErrRecombs > 0 && lastPrev) {
     // Start <it> at begin() + <numPrevErrorStatesAdded> to skip that number of
-    // states: these are for the immediately previous marker and were just
-    // mapped from above (as non-error states)
+    // states: these are for states added in the context of the current marker
+    // and were just mapped from above (as non-error states)
     for(auto it = _prevErrorStates.begin() + numPrevErrorStatesAdded;
 	     it != _prevErrorStates.end(); ) {
       int errorHMMIndex = it->first;
@@ -1614,8 +1619,11 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
       // Prefer paths that include a smaller number of markers indicated as
       // erroneous; do this by very slightly adjusting the error term depending
       // on the number of markers being spanned
-      // Note: there are _hmm.length() - 1 markers before this one
-      newState->minRecomb += 1 * (_hmm.length() - 1);
+      // Note: there are _hmm.length() - 1 markers before this one, and
+      // _hmm.length() includes the current marker. We just applied a penalty
+      // above, and we only want to further panelize if _hmm.length() > 2, so:
+      newState->minRecomb += 1 * (_hmm.length() - 2);
+      assert(_hmm.length() >= 2); // assumed above
     }
     else {
       newState->error = 0;
@@ -2409,13 +2417,18 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       totalRecombs = prevState->minRecomb + numRecombs[0] * 10;
 
       if (error) {
-	// state is > 1 index back => error state: apply penalty
-	// see comment above State::minRecomb (phaser.h) for why this:
+	// error state: apply penalty see comment above State::minRecomb
+	// (phaser.h) for why this:
 	totalRecombs += CmdLineOpts::maxNoErrRecombs * 10 - 5;
 	// Prefer paths that include a smaller number of markers indicated as
 	// erroneous; do this by very slightly adjusting the error term
-	// depending on the number of markers being spanned
-	totalRecombs += 1 * (prevHMMIndex - 1);
+	// depending on the number of markers being spanned. Note that
+	// prevHMMIndex > 1 for all erroneous states (we're skipping at least
+	// 1 marker; if we weren't, we wouldn't be in an error state and
+	// prevHMMIndex == 1). We just applied a penalty for 1 marker, and we
+	// only want to further penalize if prevHMMIndex > 2, so:
+	totalRecombs += 1 * (prevHMMIndex - 2);
+	assert(prevHMMIndex >= 2); // assumed above
       }
 
       // apply penalty for children's IVs switching from one parent to other

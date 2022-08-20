@@ -148,7 +148,8 @@ class Phaser {
 				  int firstMarker, int numChildren,
 				  int numMissChildren, bool forceInform,
 				  int prevHMMIndex, bool lastPrev,
-				  float minMaxRec[2]);
+				  float minMaxRec[2],
+				  int &numPrevErrorStatesAdded);
     static uint8_t isIVambigPar(uint64_t iv, uint64_t ambigIV,
 				uint64_t unassigned = 0);
     static void mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
