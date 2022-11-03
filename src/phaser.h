@@ -205,7 +205,7 @@ class Phaser {
 			       uint8_t prevHMMIndex, uint32_t prevIndex,
 			       bool error, uint8_t IVambigPar,
 			       float minMaxRec[2], int numMarkersSincePrev,
-			       int16_t numMarkersSinceOneHetPar,
+			       uint16_t numMarkersSinceOneHetPar,
 			       uint32_t totalRecombs, float totalLikehood,
 			       size_t numRecombs, int lowOrderChildBit);
     static int8_t decideOptimalState(State *theState, const State *prevState,
@@ -481,7 +481,7 @@ struct State {
   // This is signed and set to be negative when the penalty applied to states
   // where both parents are heterozygous over a long stretch (which in practice
   // deletes that state path).
-  int16_t numMarkersSinceOneHetPar;
+  uint16_t numMarkersSinceOneHetPar;
 
   // We prefer to back trace to states that have recombinations immediately
   // before the current state as opposed to earlier. In general this decision

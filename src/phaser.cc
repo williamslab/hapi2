@@ -1581,7 +1581,7 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
 
     // Track the number of markers since the last one that is heterozygous for
     // only one parent (only need do this if only one parent is missing data)
-    int16_t numMarkersSinceOneHetPar = 0;
+    uint16_t numMarkersSinceOneHetPar = 0;
     if ( (_missingPar == 1 || _missingPar == 2) ) {
       // PI states are heterozygous for both parents, so count if <isPI> or
       // in a corner case (see comment near definition of <fakeOneHetPar> below)
@@ -2194,9 +2194,8 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 
   // Track the number of markers since the last one that is heterozygous for
   // only one parent (only need do this if only one parent is missing data)
-  int16_t numMarkersSinceOneHetPar = 0;
-  if ( (_missingPar == 1 || _missingPar == 2) &&
-				    prevState->numMarkersSinceOneHetPar >= 0) {
+  uint16_t numMarkersSinceOneHetPar = 0;
+  if (_missingPar == 1 || _missingPar == 2) {
     // Case where we have data for one parent; attempt to detect switch in
     // which parent is which: this manifests as long stretches where both
     // parents are heterozygous. Thus, we count markers below (in
@@ -2256,7 +2255,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
   uint8_t ohpPenalty = 0;
   if (numMarkersSinceOneHetPar > CmdLineOpts::bothParHetThreshold) {
     ohpPenalty = 1;
-    numMarkersSinceOneHetPar = -1; // penalty will be applied below
+    numMarkersSinceOneHetPar = 0; // penalty will be applied below
   }
 
   // For maximum likelihood phasing, get the relevant (log) probabilities and
@@ -2638,7 +2637,7 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
 			    uint8_t prevHMMIndex, uint32_t prevIndex,
 			    bool error, uint8_t IVambigPar, float minMaxRec[2],
 			    int numMarkersSincePrev,
-			    int16_t numMarkersSinceOneHetPar,
+			    uint16_t numMarkersSinceOneHetPar,
 			    uint32_t totalRecombs, float totalLikehood,
 			    size_t numRecombs, int lowOrderChildBit) {
   // Does the current previous state lead to minimum recombinations for
