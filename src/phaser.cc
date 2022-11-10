@@ -32,7 +32,6 @@ uint64_t Phaser::_ambigFlips[4];
 int      Phaser::_curMarker;
 int      Phaser::_lastInformMarker;
 int      Phaser::_lastRealInformIndex;
-Phaser::uint32_set Phaser::_stateIdxsToForceFrom;
 int      Phaser::_lastForceInformMarker;
 int      Phaser::_lastForceInformIndex;
 bool     Phaser::_onChrX;
@@ -135,7 +134,6 @@ void Phaser::initPhaseState(NuclearFamily *theFam) {
 
   _lastInformMarker = -1;
   _lastRealInformIndex = -1;
-  _stateIdxsToForceFrom.clear();
   _lastForceInformMarker = -1;
   _lastForceInformIndex = -1;
 
@@ -310,23 +308,32 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
     // missing parent often mean that that parent has transmitted only one
     // haplotype to the children. Force an informative marker after
     // sufficiently long stretch.
-    // Only need to check this if _lastRealInformIndex < 0 -- i.e., there has
-    // not been a forced informative marker since the most recent "real" one
-    else if (!_onChrX && _missingPar > 0 && _lastRealInformIndex < 0 &&
+    // Check for the need to force an informative marker if either
+    // _lastRealInformIndex < 0 -- i.e., there has not been a forced
+    // informative marker since the most recent "real" one -- or if there have
+    // been at least CmdLineOpts::forceInformSeparation markers since the last
+    // forced one.
+    else if (!_onChrX && _missingPar > 0 &&
+	     (_lastRealInformIndex < 0 ||
+	      (_curMarker - _lastInformMarker) >=
+					  CmdLineOpts::forceInformSeparation) &&
 	     // need it to be possible for this marker to be heterozygous for
 	     // the OHT parent
 	     ( (mt & 1 << MT_PI) || (mt & (1 << MT_FI_1)) ) &&
 	     _curMarker - firstMarker >= CmdLineOpts::forceInformInit) {
+      assert(_lastInformMarker >= 0);
+      int numMarkersSinceInform = _curMarker - _lastInformMarker;
       int lastHmmIdx = _hmm.length() - 1;
       for(uint16_t i = 0; lastHmmIdx >= 0 &&
 			  i < _hmm[lastHmmIdx].length(); i++) {
 	State *theState = _hmm[lastHmmIdx][i];
-	if ( isIVambigPar( theState->iv, theState->ambig ) )
+	if ( isIVambigPar( theState->iv, theState->ambig ) ) {
 	  // no need to force informative markers when the het parent is
 	  // ambiguous
 	  continue;
+	}
 	for (int p = _firstMissP; p < _limitMissP; p++) {
-	  if (theState->numMarkersSinceNonHetPar[p] <
+	  if (theState->numMarkersSinceNonHetPar[p] + numMarkersSinceInform <
 						  CmdLineOpts::forceInformInit)
 	    // too close to most recent informative marker: no forcing
 	    continue;
@@ -349,9 +356,14 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 //	  if (numTrans[minPat] > 2)
 //	    continue; // too many children would need to recombine: no OHT
 
-	  // One hap trans scenario! add a forced informative marker
+	  // One hap trans scenario! add a forced informative marker and
+	  // transition to it from this state
+	  assert(theState->txToForcedInform == 0);
+	  theState->txToForcedInform = 1;
 	  forceInform = true;
-	  _stateIdxsToForceFrom.insert(i);
+	  // no need to keep looping over parents in <theState>: we'll add a
+	  // forced informative marker and tx to it from <theState>.
+	  break;
 	}
       }
       if (lastHmmIdx < 0)
@@ -403,9 +415,6 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
       theFam->setSpecialX(_curMarker, _parentData, _childrenData[4],
 			  _childrenData[G_MISS] & _parBits[0], homParGeno,
 			  swapHetChildren);
-      // seems like we shouldn't get a forced informative marker in this case;
-      // confirm:
-      assert(_stateIdxsToForceFrom.size() == 0);
     }
     return -1; // no further phasing needed
   }
@@ -1307,8 +1316,6 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates,
   // reset "real" informative marker index
   if (_lastRealInformIndex >= 0 && !forceInform) {
     _lastRealInformIndex = -1;
-    // these indexes only apply to <_lastRealInformIndex>
-    _stateIdxsToForceFrom.clear();
   }
 }
 
@@ -1325,48 +1332,45 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
 			       int prevHMMIndexAbs, bool lastPrev,
 			       float minMaxRec[2],
 			       int &numPrevErrorStatesAdded) {
+  // Final index is _hmm.length() - 1, but the caller ran _hmm.addEmpty(), so
+  // the most recent index with states is -2:
   int mostRecentHMMIndex = _hmm.length() - 2;
 
   dynarray<State*> &prevStates = _hmm[prevHMMIndexAbs];
   uint32_t numPrev = prevStates.length();
   int numPartial = partialStates.length();
+  // variables used if <forceInform>:
+  int hetParToForce = -1;
+  int numMarkersSinceInform = _curMarker - _lastInformMarker;
 
   //////////////////////////////////////////////////////////////////////////////
   // Map previous states to current states (i.e., at this marker) with no errors
+  for(uint32_t prevIdx = 0; prevIdx < numPrev; prevIdx++) {
+    State *prevState = prevStates[prevIdx];
 
-  // If <forceInform>, want to only consider the previous state indexes in
-  // <_stateIdxsToForceFrom>, otherwise we consider all <numPrev> entries
-  int numIters = numPrev;
-  // TODO: this is slow -- iterate over _stateIdxsToForceFrom
-  dynarray<uint32_t> tempStates; // TODO: slow
-  if (forceInform) {
-    for(uint32_set::const_iterator it = _stateIdxsToForceFrom.begin();
-	it != _stateIdxsToForceFrom.end(); it++) {
-      tempStates.append(*it);
-    }
-    numIters = tempStates.length();
-  }
-  for(int iter = 0; iter < numIters; iter++) {
-    int prevIdx;
-    if (forceInform)
-      prevIdx = tempStates[ iter ];
-    else
-      prevIdx = iter;
-    const State *prevState = prevStates[prevIdx];
-
-    int hetParToForce = -1;
     if (forceInform) {
-      if (prevState->numMarkersSinceNonHetPar[0] >=
+      if (prevState->txToForcedInform != 1)
+	// should only transition to this marker (which is forced informative)
+	// if prevState->txToForcedInform == 1
+	continue;
+
+      hetParToForce = -1;
+
+      // will go forward and transition to this forced informative marker;
+      // use the value of 2 to mark this state as having transitioned
+      prevState->txToForcedInform = 2;
+
+      if (prevState->numMarkersSinceNonHetPar[0] + numMarkersSinceInform >=
 						CmdLineOpts::forceInformInit &&
-	  prevState->numMarkersSinceNonHetPar[1] >=
+	  prevState->numMarkersSinceNonHetPar[1] + numMarkersSinceInform >=
 						CmdLineOpts::forceInformInit) {
 	hetParToForce = 2;
 	assert(partialStates.length() == 3);
       }
-      else if (prevState->numMarkersSinceNonHetPar[0] >=
+      else if (prevState->numMarkersSinceNonHetPar[0] + numMarkersSinceInform >=
 						   CmdLineOpts::forceInformInit)
 	hetParToForce = 0;
-      else if (prevState->numMarkersSinceNonHetPar[1] >=
+      else if (prevState->numMarkersSinceNonHetPar[1] + numMarkersSinceInform >=
 						   CmdLineOpts::forceInformInit)
 	hetParToForce = 1;
       else
@@ -1374,19 +1378,15 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
 	// occur in one of the cases above
 	assert(false);
     }
-    else if (!forceInform && prevHMMIndexAbs == _lastRealInformIndex) {
-      // This assumes we only get one forced informative marker between any
-      // pair of "real" informative markers
-      bool skip = false;
-      uint32_set::const_iterator findIter = _stateIdxsToForceFrom.find(prevIdx);
-      if (findIter != _stateIdxsToForceFrom.end())
-	skip = true;
-
-      if (skip)
+    else if (!forceInform) {
+      if (prevState->txToForcedInform > 0) {
+	// shouldn't be 1 (transition should have happened)
+	assert(prevState->txToForcedInform == 2);
 	// shouldn't map from this state to the current marker -- it has a
 	// forced informative marker we've already mapped from: skip it
-	// (can get this mapping by introducing an error: see below)
+	// (note: we can map from this state by introducing an error: see below)
 	continue;
+      }
     }
 
     // See comment above the isIVambigPar() method. We deal with
@@ -1629,6 +1629,8 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
       newState->error = 0;
       newState->minRecomb = 0;
     }
+    newState->txToForcedInform = 0;
+
     // TODO: optimization: in fact this may add two states with the same IV
     // ideally should lookup this state and only update if this one is better
     _hmm[ _hmm.length() - 1 ].append(newState);
@@ -2565,6 +2567,7 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t allAmbig,
     newState->unassigned = unassigned;
     newState->minRecomb = UINT32_MAX;
     newState->maxLikelihood = -FLT_MAX;
+    newState->txToForcedInform = 0;
     iv_ambig newStateKey = new iv_ambig_real(lookupIV, allAmbig, unassigned);
     _stateHash[ newStateKey ] = newState;
     int curHMMIndex = _hmm.length() - 1;
@@ -2675,14 +2678,18 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
     theState->ambigPrev = 0;
     theState->minRecomb = totalRecombs;
     // assign <numMarkersSinceNonHetPar>:
-    for (int p = 0; p < 2; p++) {
+    for (uint8_t p = 0; p < 2; p++) {
       uint8_t parentMissing = (_missingPar >> p) & 1;
-      theState->numMarkersSinceNonHetPar[p] =
-					    parentMissing * numMarkersSincePrev;
-      if (parentMissing && prevState->hetParent == 1 - p)
+      if (!parentMissing) {
+	theState->numMarkersSinceNonHetPar[p] = 0;
+	continue;
+      }
+      // <p> is missing; update <theState->numMarkersSinceNonHetPar[p]>
+      int totalNumSincePrev = numMarkersSincePrev;
+      if (prevState->hetParent == 1 - p)
 	// prevState is not heterozygous for <p>: sum prev count
-	theState->numMarkersSinceNonHetPar[p] +=
-					prevState->numMarkersSinceNonHetPar[p];
+	totalNumSincePrev += prevState->numMarkersSinceNonHetPar[p];
+      theState->numMarkersSinceNonHetPar[p] = totalNumSincePrev;
     }
     theState->numMarkersSinceOneHetPar = numMarkersSinceOneHetPar;
     theState->maxLikelihood = totalLikehood;
@@ -2801,6 +2808,7 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
   }
 
   if (theStateUpdated) {
+    int numMarkersSinceInform = _curMarker - _hmmMarker[prevHMMIndex];
     // So that we don't get additional forced one hap trans states when:
     // (1) we're getting to this state via an error (necessarily if (2)) and
     // (2) one was just added for this previous state (i.e., between the
@@ -2810,41 +2818,35 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
     // That way, we can get another forced informative marker every
     // CmdLineOpts::forceInformSeparation markers.
     int curHMMIndex = _hmm.length() - 1;
-    if (error && _lastRealInformIndex == curHMMIndex - prevHMMIndex) {
-      // check that _this_ state was mapped to a forced informative marker
-      uint32_set::const_iterator findIt = _stateIdxsToForceFrom.find(prevIndex);
-      if (findIt != _stateIdxsToForceFrom.end()) {
-	uint8_t p = 0;
-	if (prevState->numMarkersSinceNonHetPar[0] >=
-						CmdLineOpts::forceInformInit &&
-	    prevState->numMarkersSinceNonHetPar[1] >=
-						CmdLineOpts::forceInformInit)
-	  // arbitrarily pick parent 0 to reset; a later OHT forced informative
-	  // marker for parent 1 will trigger this case if needed
-	  // TODO: should think about this case (when _both_ parents are above
-	  // the threshold) a bit more
-	  p = 0;
-	else if (prevState->numMarkersSinceNonHetPar[0] >=
-						CmdLineOpts::forceInformInit)
-	  p = 0;
-	else if (prevState->numMarkersSinceNonHetPar[1] >=
-						CmdLineOpts::forceInformInit)
-	  p = 1;
-	else
-	  // this should be impossible since forced informative markers only
-	  // occur in one of the cases above
-	  assert(false);
+    if (error && prevState->txToForcedInform > 0) {
+      assert(prevState->txToForcedInform == 2);
 
-	if (prevState->numMarkersSinceNonHetPar[p] >=
-						CmdLineOpts::forceInformInit) {
-	  int numMarkersSinceForced = _curMarker - _hmmMarker[curHMMIndex - 1];
-	  int reducedNumSince = CmdLineOpts::forceInformInit -
-				CmdLineOpts::forceInformSeparation +
-				numMarkersSinceForced;
-	  theState->numMarkersSinceNonHetPar[p] =
+      uint8_t startP = 0;
+      uint8_t endP = 1;
+      if (prevState->numMarkersSinceNonHetPar[0] + numMarkersSinceInform >=
+						CmdLineOpts::forceInformInit &&
+	  prevState->numMarkersSinceNonHetPar[1] + numMarkersSinceInform >=
+						CmdLineOpts::forceInformInit)
+	; // default assignments of <startP>, <endP> apply
+      else if (prevState->numMarkersSinceNonHetPar[0] + numMarkersSinceInform >=
+						CmdLineOpts::forceInformInit)
+	endP = 0;
+      else if (prevState->numMarkersSinceNonHetPar[1] + numMarkersSinceInform >=
+						CmdLineOpts::forceInformInit)
+	startP = 1;
+      else
+	// this should be impossible since forced informative markers only
+	// occur in one of the cases above
+	assert(false);
+
+      int numMarkersSinceForced = _curMarker - _hmmMarker[curHMMIndex - 1];
+      int reducedNumSince = CmdLineOpts::forceInformInit -
+			    CmdLineOpts::forceInformSeparation +
+			    numMarkersSinceForced;
+      for(uint8_t p = startP; p <= endP; p++) {
+	theState->numMarkersSinceNonHetPar[p] =
 				    min(reducedNumSince,
 					theState->numMarkersSinceNonHetPar[p]);
-	}
       }
     }
   }

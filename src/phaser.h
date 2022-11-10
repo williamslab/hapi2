@@ -107,8 +107,6 @@ class Phaser {
       _parInformMarkers[1].resize(maxMarkers / 2);
       _genos.resize(maxMarkers);
       _ambigPrevLists.resize(maxMarkers);
-
-      _stateIdxsToForceFrom.set_empty_key((uint32_t) UINT32_MAX);
     }
     static void run(NuclearFamily *theFam, int chrIdx, FILE *log);
 
@@ -381,8 +379,6 @@ class Phaser {
     };
     typedef typename google::dense_hash_set<uint32_t, std::hash<uint32_t>,
 					    equint32_t> uint32_set;
-    // TODO: store a pair? The state index and the parent to force?
-    static uint32_set _stateIdxsToForceFrom;
 
     // What marker number and _hmm index is the most recent forced informative
     // marker. Assigned -1 when not in a one hap trans region.
@@ -441,7 +437,7 @@ struct State {
   // the capacity here? Unlikely to be more than 2^32 states but could check
   uint32_t prevState;
 
-  // relative HMM index -- many HMM indexes back -- for the previous state
+  // relative HMM index -- how many HMM indexes back -- for the previous state
   // If non-error, this will be 1
   uint8_t prevHMMIndex;
 
@@ -537,6 +533,11 @@ struct State {
   // error state. Tracking whether some state leading to this one is an error
   // state allows us to prefer non-error state paths when there are ambiguities
   uint8_t  error;  // fits in 2 bits
+
+  // Track whether this State transitions to a forced informative marker. The
+  // value is 0 if it does not, 1 if it should, and 2 once the transition has
+  // been applied.
+  uint8_t txToForcedInform; // fits in 2 bits
 };
 
 #endif // PHASER_H
