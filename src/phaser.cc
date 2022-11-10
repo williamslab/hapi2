@@ -1820,6 +1820,21 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 		     hetParent, stdAmbigOnlyPrev, ambig1PrevInfo,
 		     ambig1Unassigned);
 
+  // What type of phase is the default? the alternative? For MT_PI states, the
+  // alternative, which must have the same ambiguous bits, is 3 decimal == 11
+  // binary (vs. default of 0).
+  // See just below for what this code does:
+  uint8_t initPhaseType = 0;
+  uint8_t altPhaseType = isPI * 3 + (1 - isPI);
+  // Above equivalent to the line below but has no branching
+  //uint8_t altPhaseType = (isPI) ? 3 : 1;
+
+  if (isPI && IVambigPar) {
+    checkChangeInitialPhaseForIVambigPar(prevState, fullIV, recombs,
+					 stdAmbigOnlyPrev, ambig1PrevInfo,
+					 initPhaseType, altPhaseType);
+  }
+
   // (4) Look up or create a full state with equivalent <iv> and <ambig> values
   // to <fullIV> and <fullAmbig>, and determine if <prevState> yields fewer
   // recombinations for these states than the currently stored previous state
@@ -1827,17 +1842,9 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
   // Also examines an alternate phase type which may or may not map to an
   // equivalent state. If not, looks up that value, if so, compares the
   // recombinations for the two possibilities separately.
-  //
-  // What type of phase is the alternative? For MT_PI states, the alternative,
-  // which must have the same ambiguous bits, is 3 decimal == 11 binary (vs.
-  // default of 0).
-  // See just below for what this code does:
-  uint8_t altPhaseType = isPI * 3 + (1 - isPI);
-  // Above equivalent to the line below but has no branching
-  //uint8_t altPhaseType = (isPI) ? 3 : 1;
   updateStates(fullIV, fullAmbig, fullUnassigned, ambig1Unassigned, recombs,
 	       prevState, stdAmbigOnlyPrev, ambig1PrevInfo, hetParent,
-	       curPartial.homParentGeno, /*initParPhase=default phase=*/ 0,
+	       curPartial.homParentGeno, /*initParPhase=*/initPhaseType,
 	       altPhaseType, prevHMMIndex, prevIdx, error, IVambigPar,
 	       minMaxRec, hetParentUndefined, numDataChildren,
 	       numMarkersSincePrev, zeroRecombsThisPrev);
@@ -1872,13 +1879,22 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
 //    assert((recombs & _childrenData[G_HET] & (childPrevUnassigned[0] |
 //						 childPrevUnassigned[1])) == 0);
 
+    initPhaseType = 1; // parent 0 flip
+    altPhaseType = 2;  // parent 1 flip
+
+    if (isPI && IVambigPar) {
+      checkChangeInitialPhaseForIVambigPar(prevState, fullIV, recombs,
+					   stdAmbigOnlyPrev, ambig1PrevInfo,
+					   initPhaseType, altPhaseType);
+    }
+
     ///////////////////////////////////////////////////////////////////////////
     // Now ready to look up or create full states with the <fullIV> and
     // <fullAmbig> values, etc.
     updateStates(fullIV, fullAmbig, fullUnassigned, ambig1Unassigned, recombs,
 		 prevState, stdAmbigOnlyPrev, ambig1PrevInfo, /*hetParent=*/2,
-		 /*homParentGeno=*/G_MISS, /*initParPhase=parent 0 flip=*/1,
-		 /*altPhaseType=parent 1 flip=*/ 2, prevHMMIndex, prevIdx,
+		 /*homParentGeno=*/G_MISS, /*initParPhase=*/ initPhaseType,
+		 /*altPhaseType=*/ altPhaseType, prevHMMIndex, prevIdx,
 		 error, IVambigPar, minMaxRec, /*hetParentUndefined=*/ false,
 		 numDataChildren, numMarkersSincePrev, zeroRecombsThisPrev);
   }
@@ -2155,6 +2171,53 @@ void Phaser::fixRecombFromAmbig(uint64_t &fullIV, uint64_t &recombs,
   ambig1PrevInfo += (1 - isPI) * ambig1OnlyPrev & _parBits[homozyParent];
   ambig1Unassigned = (1 - isPI) * (ambig1PrevInfo &
 					      parRecombsFromAmbig[ hetParIdx ]);
+}
+
+// When <IVambigPar> is true at a PI state, if two alternative phasings have
+// equal numbers of recombinations, need the initial phase to attribute more
+// recombinations to parent 0*. This is because we arbitrarily choose to only
+// track parent 0 het states when <IVambigPar> (i.e., when the heterozygous
+// parent is ambiguous).
+// * Actually only need consider the recombinations in homozygous children: the
+//   recombinations in children that are heterozygous can be attributed to
+//   either parent (are ambiguous).
+void Phaser::checkChangeInitialPhaseForIVambigPar(const State *prevState,
+			    uint64_t &fullIV, uint64_t &recombs,
+			    uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
+			    uint8_t &initPhaseType, uint8_t &altPhaseType) {
+  // Get recombinations under the alternate (flipped for both parents) phase
+  // type:
+  // code adapted from that in the latter part of updateStates() (where the IV
+  // and other values are flipped to those for the alternate phase type)
+  uint64_t noFlipBits = _childrenData[G_MISS] | _childrenData[G_HET];
+  uint64_t flipVal = _parBits[2] & ~noFlipBits;
+  uint64_t altRecombs = recombs ^
+    (flipVal & ~(stdAmbigOnlyPrev | ambig1PrevInfo | prevState->unassigned));
+  if (popcount(recombs) == popcount(altRecombs)) {
+    // Ambiguous states! May want to flip the initial phase type:
+    // Note: G_MISS won't recombine, so not G_HET suffices to get the G_HOM*
+    // child recombinations
+    uint64_t homChildRecombs = recombs & ~_childrenData[G_HET];
+    uint8_t numHomChildRecombsPar0 = popcount(homChildRecombs & _parBits[0]);
+    uint64_t altHomChildRecombs = altRecombs & ~_childrenData[G_HET];
+    uint8_t numAltHomChildRecombsPar0 =
+				  popcount(altHomChildRecombs & _parBits[0]);
+    if (numAltHomChildRecombsPar0 > numHomChildRecombsPar0) {
+      // alternate phase attributes more recombinations to parent 0; since
+      // we only keep the parent 0 het state when <IVambigPar>, using such
+      // a phase for the PI state means the two can map to the same IV
+      // (this won't always happen, but when it can happen, we prefer to
+      // have such a consistent IV)
+      uint64_t altIV = fullIV ^ flipVal;
+      fullIV = altIV;
+      // No changes to fullAmbig, fullUnassigned, or ambig1Unassigned needed
+      recombs = altRecombs;
+      // swap phase types:
+      uint8_t tmp = initPhaseType;
+      initPhaseType = altPhaseType;
+      altPhaseType = tmp;
+    }
+  }
 }
 
 // Look up or create a full state with equivalent <iv> and <ambig> values to

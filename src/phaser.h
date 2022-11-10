@@ -176,6 +176,10 @@ class Phaser {
 				   uint64_t &stdAmbigOnlyPrev,
 				   uint64_t &ambig1PrevInfo,
 				   uint64_t &ambig1Unassigned);
+    static void checkChangeInitialPhaseForIVambigPar(const State *prevState,
+			    uint64_t &fullIV, uint64_t &recombs,
+			    uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
+			    uint8_t &initPhaseType, uint8_t &altPhaseType);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t ambig1Unassigned,
 			     uint64_t recombs, const State *prevState,
