@@ -3520,7 +3520,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     if (curState->error & 1) {
       assert(curState->prevHMMIndex > 1);
 
-      // Set error for immediately the skipped (error) markers
+      // Set error immediately for the skipped (error) markers
       for(uint8_t relIdx = 1; relIdx < curState->prevHMMIndex; relIdx++) {
 	int theHMMIndex = hmmIndex - relIdx;
 	uint64_t childrenData = _genos[theHMMIndex].second;
@@ -3975,8 +3975,9 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
   // We use the IV values at the flanking informative markers to determine
   // this. <ivFlippable> values are uncertain and so those values will not
   // figure into which haplotypes the parents transmitted.
-  // start with <ivFlippable> at the current and subsequent marker:
-  uint64_t uncertainIV = lastIVFlip | ivFlippable;
+  // start with <ivFlippable> at the current and subsequent markers; we'll
+  // modify this further below
+  uint64_t uncertainIV = ivFlippable;
 
   uint64_t curIVparDiff = (curState->iv & _parBits[0]) ^
 					    ((curState->iv & _parBits[1]) >> 1);
@@ -3990,6 +3991,12 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
     untrans = 0;
 
     if (m == startMarker + 1 && lastIVSet) {
+      // although <startMarker> is only uncertain at <ivFlippable> values (it
+      // is informative and its <ivFlippable> value applies exactly at that
+      // site), subsequent markers are also uncertain at flippable values at
+      // the physically subsequent marker -- since we're backtracing that's
+      // the last visited site
+      uncertainIV |= lastIVFlip;
       // if a child received a recombined haplotype, the location of the
       // recombination is uncertain, and which of the parent's haplotypes s/he
       // transmitted cannot be determined. As such, we won't include that
