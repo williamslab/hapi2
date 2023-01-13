@@ -3523,6 +3523,13 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
       // Set error immediately for the skipped (error) markers
       for(uint8_t relIdx = 1; relIdx < curState->prevHMMIndex; relIdx++) {
 	int theHMMIndex = hmmIndex - relIdx;
+	if (theFam->getStatus(_hmmMarker[theHMMIndex]) != NUM_PHASE_STATUS) {
+	  // this marker has already had its status set: it must be a forced
+	  // informative marker and isn't truly an error. Leave the original
+	  // status as is
+	  deleteStates(_hmm[theHMMIndex]);
+	  continue;
+	}
 	uint64_t childrenData = _genos[theHMMIndex].second;
 	uint64_t missing = (childrenData & _parBits[0]) &
 					  ~((childrenData & _parBits[1]) >> 1);
