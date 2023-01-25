@@ -122,8 +122,8 @@ class Phaser {
 					     uint8_t parentGenoTypes,
 					     uint8_t childGenoTypes,
 					     uint8_t &homParGeno,
-					     int firstMarker, bool &forceInform,
-					     FILE *log);
+					     int8_t &forceInform,
+					     int firstMarker, FILE *log);
     static int  getMarkerTypeAuto(uint8_t parentGenoTypes,
 				  uint8_t childGenoTypes, uint8_t &homParGeno,
 				  uint8_t &imputeUninfHomPar);
@@ -139,12 +139,12 @@ class Phaser {
     static void makePartialPIStates(dynarray<State> &partialStates);
     static void makeFullStates(const dynarray<State> &partialStates,
 			       int firstMarker, int numChildren,
-			       int numMissChildren, bool forceInform);
+			       int numMissChildren, int8_t forceInform);
     static void addStatesNoPrev(const dynarray<State> &partialStates,
 				int firstMarker, bool error = false);
     static void addStatesWithPrev(const dynarray<State> &partialStates,
 				  int firstMarker, int numChildren,
-				  int numMissChildren, bool forceInform,
+				  int numMissChildren, int8_t forceInform,
 				  int prevHMMIndex, bool lastPrev,
 				  float minMaxRec[2],
 				  int &numPrevErrorStatesAdded);
@@ -389,6 +389,14 @@ class Phaser {
     static int _lastForceInformMarker;
     static int _lastForceInformIndex;
 
+    // For tracking when to force an informative marker: no need to iterate
+    // over all the states at each succesive site. Memoize here the maximum
+    // number of markers that have passed since one that was informative for
+    // each parent.  This value is stored in each state, with the maximum for
+    // the last informative marker stored here:
+    static int16_t _maxNumMarkersSinceHetPar[2];
+    static int _lastMarkerInMaxSince;
+
     // Are we analyzing the X chromosome?
     static bool _onChrX;
 
@@ -539,9 +547,8 @@ struct State {
   uint8_t  error;  // fits in 2 bits
 
   // Track whether this State transitions to a forced informative marker. The
-  // value is 0 if it does not, 1 if it should, and 2 once the transition has
-  // been applied.
-  uint8_t txToForcedInform; // fits in 2 bits
+  // value is 0 if it does not and 1 if it does.
+  uint8_t txToForcedInform; // fits in 1 bit
 };
 
 #endif // PHASER_H
