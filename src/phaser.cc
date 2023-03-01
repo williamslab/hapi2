@@ -1411,9 +1411,12 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
 
     for(int curIdx = 0; curIdx < numPartial; curIdx++) {
       const State &curPartial = partialStates[curIdx];
-      if (forceInform >= 0 && curPartial.hetParent != forceInform)
-	// only want to force an informative marker for the appropriate parent
-	continue;
+      if (forceInform >= 0) {
+	if (forceInform != 2 && curPartial.hetParent != forceInform)
+	  // only force an informative marker for the appropriate parent; we
+	  // include all parent het options when forceInform == 2
+	  continue;
+      }
 
       if (IVambigPar && curPartial.hetParent == 1)
 	// When both parents are missing data, initial PI states do not actually
@@ -1524,8 +1527,8 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
     // erroneous. See comment above the <errorSpanTooLarge> variable for why
     // this bound is set at it is (interacts with forced informative markers)
     bool allowAllPrevSitesErrors =
-			  _hmmMarker.length() - 1 <= CmdLineOpts::errorLength &&
-			  _curMarker <= CmdLineOpts::forceInformInit + 50;
+		_hmmMarker.length() - 1 <= CmdLineOpts::errorLength &&
+		(_curMarker - firstMarker) <= CmdLineOpts::forceInformInit + 50;
     if (allowAllPrevSitesErrors)
       addStatesNoPrev(partialStates, firstMarker, /*error=*/ true);
   }
