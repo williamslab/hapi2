@@ -353,6 +353,21 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 	      continue;
 	  }
 	  for (int p = _firstMissP; p < _limitMissP; p++) {
+	    // _May_ want to force an informative marker; check the IV:
+	    uint64_t parHap = theState->iv & _parBits[p];
+	    uint64_t oppParHap = parHap ^ _parBits[p];
+	    // 0, 1 or 2 bits set in parHap or oppParHap?
+	    // * Only 1 corresponds to either all but one of the children or all
+	    //   children except one receiving the same haplotype.
+	    // * Also check for 2 since, in some cases, two children could
+	    //   recombine near each other and produce a oneHapTrans scenario
+	    uint8_t numTrans[2] = { (uint8_t) popcount(parHap),
+				    (uint8_t) popcount(oppParHap) };
+	    // which pattern (parHap/oppParHap) has min number of 1s (popcount)?
+	    int minPat = (numTrans[0] <= numTrans[1]) ? 0 : 1;
+	    if (numTrans[minPat] > 2)
+	      continue; // too many children would need to recombine: no OHT
+
 	    if (theState->numMarkersSinceNonHetPar[p] >
 						_maxNumMarkersSinceHetPar[p])
 	      _maxNumMarkersSinceHetPar[p] =
@@ -361,40 +376,26 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 	}
 	_lastMarkerInMaxSince = lastHmmIdx;
       }
+
+      // Decide whether to force an informative marker
       for (int p = _firstMissP; p < _limitMissP; p++) {
-	if (_maxNumMarkersSinceHetPar[p] < 0 ||
-	    _maxNumMarkersSinceHetPar[p] + numMarkersSinceInform <
-						  CmdLineOpts::forceInformInit)
-	  // too close to most recent informative marker: no forcing
-	  continue;
-
-	// _May_ want to force an informative marker; check the IV:
-	// TODO: rm?
-	//       test3 change
-//	uint64_t parHap = theState->iv & _parBits[p];
-//	uint64_t oppParHap = parHap ^ _parBits[p];
-//	// 0, 1 or 2 bits set in parHap or oppParHap?
-//	// * Only 1 corresponds to either all but one of the children or all
-//	//   children except one receiving the same haplotype.
-//	// * Also check for 2 since, in some cases, two children could
-//	//   recombine near each other and produce a oneHapTrans scenario
-//	uint8_t numTrans[2] = { (uint8_t) popcount(parHap),
-//				(uint8_t) popcount(oppParHap) };
-//	// which pattern (parHap / oppParHap) has min number of 1s (popcount)?
-//	int minPat = (numTrans[0] <= numTrans[1]) ? 0 : 1;
-//	if (numTrans[minPat] > 2)
-//	  continue; // too many children would need to recombine: no OHT
-
-	// One hap trans scenario! add a forced informative marker
-	if (forceInform < 0)
-	  forceInform = p;
-	else
+	if (_maxNumMarkersSinceHetPar[p] >= 0 &&
+	    _maxNumMarkersSinceHetPar[p] + numMarkersSinceInform >=
+						CmdLineOpts::forceInformInit) {
+	  // Old version only assigned forceInform for one parent if only one
+	  // parent had numMarkersSinceHetPar sufficiently large. This led to
+	  // some bizarre state paths since there were ways to avoid getting
+	  // any penalties. Always adding a forced informative marker of all
+	  // the parent het types ensures that all paths get penalized.
 	  forceInform = 2;
+	  break;
+	}
       }
+
       if (lastHmmIdx < 0)
 	// no previous state => no informative marker though we've passed
 	// CmdLineOpts::forceInformInit markers: should force one
-	forceInform = true;
+	forceInform = 2;
       else if (forceInform >= 0 && _lastRealInformIndex < 0)
 	_lastRealInformIndex = lastHmmIdx;
     }
@@ -1330,14 +1331,23 @@ void Phaser::makeFullStates(const dynarray<State> &partialStates,
   // paths to the next and subsequent markers)
   int numPrevErrorStatesAdded = 0;
 
-  for (int mapFromHMMIndex = prevHMMIndexAbs; mapFromHMMIndex >= stopHMMIndex;
-							    mapFromHMMIndex--) {
-    // only consider errors on last iteration of this loop: i.e., from the only
-    // "real" informative marker we transition from here
+  // Typically, we transition from the states at the most recent informative
+  // marker (whether forced or real) to the current marker. However, if the
+  // previous marker was forced and the current marker is not, we also
+  // transition from the most recent non-forced informative marker. This is
+  // to allow for errors at the forced informative marker(s).
+  for (int mapFromHMMIndex = prevHMMIndexAbs; true;
+					      mapFromHMMIndex = stopHMMIndex) {
+    // Only consider errors from "real" informative markers; stopHMMIndex is
+    // "real" and if prevHMMIndexAbs != stopHMMIndex, prevHMMIndexAbs is not
+    // real.
     addStatesWithPrev(partialStates, firstMarker, numChildren, numMissChildren,
 		      forceInform, mapFromHMMIndex,
 		      /*lastPrev=*/ mapFromHMMIndex == stopHMMIndex,
 		      minMaxRec, numPrevErrorStatesAdded);
+
+    if (mapFromHMMIndex == stopHMMIndex)
+      break;
   }
 
   // reset "real" informative marker index
@@ -1370,31 +1380,15 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
   //////////////////////////////////////////////////////////////////////////////
   // Map previous states to current states (i.e., at this marker) with no errors
   for(uint32_t prevIdx = 0; prevIdx < numPrev; prevIdx++) {
-    State *prevState = prevStates[prevIdx];
-    if (prevState->txToForcedInform > 0)
-      // shouldn't map from this state to the current marker -- it has a
-      // forced informative marker we've already mapped from: skip it
-      // (note: we can map from this state by introducing an error: see below)
-      continue;
+    if (prevHMMIndexAbs != mostRecentHMMIndex)
+      // only need to map from the most recent marker; error-based transitions
+      // happen below
+      break;
 
-    if (forceInform >= 0) {
-      if ( _missingPar == 3 && isIVambigPar(prevState->iv, prevState->ambig) ) {
-	if (
-	    ((prevState->iv & _parBits[0]) == 0 || (prevState->iv & _parBits[0]) == _parBits[0]) &&
-	    ((prevState->iv & _parBits[1]) == 0 || (prevState->iv & _parBits[1]) == _parBits[1])
-	   )
-	  // don't skip: this is a region in which both parents are OHT and
-	  // we need to continue to add forced informative markers to
-	  // prevent errors from interrupting the OHT region.
-	  ;
-	else
-	  // no need to force informative markers when the het parent is
-	  // ambiguous: don't track max numMarkresSinceNonHetPar
-	  continue;
-      }
-      // Will go forward and transition to this forced informative marker
+    State *prevState = prevStates[prevIdx];
+
+    if (forceInform >= 0)
       prevState->txToForcedInform = 1;
-    }
 
     // See comment above the isIVambigPar() method. We deal with
     // <IVambigPar> == 1 below and in updateStates()
@@ -1412,18 +1406,57 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
     for(int curIdx = 0; curIdx < numPartial; curIdx++) {
       const State &curPartial = partialStates[curIdx];
       if (forceInform >= 0) {
-	if (forceInform != 2 && curPartial.hetParent != forceInform)
-	  // only force an informative marker for the appropriate parent; we
-	  // include all parent het options when forceInform == 2
+	if (curPartial.hetParent < 2 &&
+	    (_missingPar & (1 << curPartial.hetParent)) == 0)
+	  // have data for curPartial.hetParent: don't force informative marker
 	  continue;
+	else if (_missingPar == 3) {
+	  if (curPartial.hetParent < 2) {
+	    if (
+		// only one haplotype transmitted for <curPartial.hetParent>
+		((prevState->iv & _parBits[curPartial.hetParent]) == 0 ||
+		 (prevState->iv & _parBits[curPartial.hetParent]) == _parBits[curPartial.hetParent]) &&
+		// <curPartial.hetParent> has a more recent informative marker
+		// than the other parent
+		(prevState->numMarkersSinceNonHetPar[curPartial.hetParent] <
+		 prevState->numMarkersSinceNonHetPar[1-curPartial.hetParent]) &&
+		// <curPartial.hetParent>'s most recent informative marker is <
+		// CmdLineOpts::forceInformInit markers ago, while the other
+		// parent's is that far away
+		(prevState->numMarkersSinceNonHetPar[curPartial.hetParent] <
+		 CmdLineOpts::forceInformInit) &&
+		(prevState->numMarkersSinceNonHetPar[1-curPartial.hetParent] >=
+		 CmdLineOpts::forceInformInit)
+	       ) {
+	      // check other parent's potential for being forced
+	      uint8_t otherHetParent = 1 - curPartial.hetParent;
+	      uint64_t parHap = prevState->iv & _parBits[otherHetParent];
+	      uint64_t oppParHap = parHap ^ _parBits[otherHetParent];
+	      // 0, 1 or 2 bits set in parHap or oppParHap?
+	      // * Only 1 corresponds to either all but one of the children or
+	      //   all children except one receiving the same haplotype.
+	      // * Also check for 2 since, in some cases, two children could
+	      //   recombine near each other and produce a oneHapTrans scenario
+	      uint8_t numTrans[2] = { (uint8_t) popcount(parHap),
+				      (uint8_t) popcount(oppParHap) };
+	      // which pattern (parHap/oppParHap) has min number of 1s
+	      // (popcount)?
+	      int minPat = (numTrans[0] <= numTrans[1]) ? 0 : 1;
+	      if (numTrans[minPat] <= 2)
+		// we want to force not curPartial.hetParent, but the other het
+		// parent
+		continue;
+	    }
+	  }
+	}
       }
 
-      if (IVambigPar && curPartial.hetParent == 1)
-	// When both parents are missing data, initial PI states do not actually
-	// distinguish the two parents and so later FI markers will be ambiguous
-	// for which parent is heterozygous. Here we arbitrarily pick parent 0
-	// as the first heterozygous parent in these cases and omit states with
-	// parent 1 het.
+      if (IVambigPar && curPartial.hetParent == 1 && forceInform < 0)
+	// When both parents are missing data, PI states do not actually
+	// distinguish the two parents and so later FI markers will be
+	// ambiguous for which parent is heterozygous. Here we arbitrarily pick
+	// parent 0 as the heterozygous parent in these cases and omit states
+	// with parent 1 het.
 	// See the code at the beginning of this function for a similar choice
 	// at the first informative marker.
 	continue;
