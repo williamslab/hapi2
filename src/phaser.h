@@ -170,16 +170,14 @@ class Phaser {
 			   const uint64_t unambigHetRecombs[4],
 			   const uint64_t childPrevUnassigned[2],
 			   uint64_t defaultPhaseHasRecomb);
-    static void fixRecombFromAmbig(uint64_t &fullIV, uint64_t &recombs,
-				   const uint64_t parRecombs[2], uint8_t isPI,
-				   uint64_t ambigOnlyPrev, uint8_t hetParent,
-				   uint64_t &stdAmbigOnlyPrev,
-				   uint64_t &ambig1PrevInfo,
-				   uint64_t &ambig1Unassigned);
-    static void checkChangeInitialPhaseForIVambigPar(const State *prevState,
-			    uint64_t &fullIV, uint64_t &recombs,
-			    uint64_t stdAmbigOnlyPrev, uint64_t ambig1PrevInfo,
-			    uint8_t &initPhaseType, uint8_t &altPhaseType);
+    static void fixRecombFromAmbigIVambigPar(const State *prevState,
+			    uint64_t &fullIV, uint64_t fullAmbig,
+			    uint64_t &recombs, const uint64_t parRecombs[2],
+			    uint8_t isPI, uint8_t IVambigPar,
+			    uint64_t ambigOnlyPrev, uint8_t hetParent,
+			    uint64_t &stdAmbigOnlyPrev, uint64_t &ambig1PrevInfo,
+			    uint64_t &ambig1Unassigned, uint8_t &initPhaseType,
+			    uint8_t &altPhaseType);
     static void updateStates(uint64_t fullIV, uint64_t fullAmbig,
 			     uint64_t fullUnassigned, uint64_t ambig1Unassigned,
 			     uint64_t recombs, const State *prevState,
@@ -195,10 +193,10 @@ class Phaser {
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
 			       const uint64_t unassigned,
 			       int &lowOrderChildBit);
-    static int lowOrderUnambigUnassignedBit(const uint64_t allAmbig,
-					    const uint64_t unassigned,
-					    uint64_t &unambig,
-					    uint64_t &ambigStd);
+    static int lowOrderUnambigAssignedBit(const uint64_t allAmbig,
+					  const uint64_t unassigned,
+					  uint64_t &unambig,
+					  uint64_t &ambigStd);
     static bool checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
 			       uint64_t ambig1Unassigned, State *theState,
 			       const State *prevState, uint8_t hetParent,
