@@ -1387,9 +1387,6 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
 
     State *prevState = prevStates[prevIdx];
 
-    if (forceInform >= 0)
-      prevState->txToForcedInform = 1;
-
     // See comment above the isIVambigPar() method. We deal with
     // <IVambigPar> == 1 below and in updateStates()
     uint8_t IVambigPar = isIVambigPar(prevState->iv, prevState->ambig);
@@ -1674,7 +1671,6 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
       newState->error = 0;
       newState->minRecomb = 0;
     }
-    newState->txToForcedInform = 0;
 
     // TODO: optimization: in fact this may add two states with the same IV
     // ideally should lookup this state and only update if this one is better
@@ -2715,7 +2711,6 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t allAmbig,
     newState->unassigned = unassigned;
     newState->minRecomb = UINT32_MAX;
     newState->maxLikelihood = -FLT_MAX;
-    newState->txToForcedInform = 0;
     iv_ambig newStateKey = new iv_ambig_real(lookupIV, allAmbig, unassigned);
     _stateHash[ newStateKey ] = newState;
     int curHMMIndex = _hmm.length() - 1;
@@ -2826,12 +2821,7 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
     theState->ambigPrev = 0;
     theState->minRecomb = totalRecombs;
     // assign <numMarkersSinceNonHetPar>:
-    for (uint8_t p = 0; p < 2; p++) {
-      uint8_t parentMissing = (_missingPar >> p) & 1;
-      if (!parentMissing) {
-	theState->numMarkersSinceNonHetPar[p] = 0;
-	continue;
-      }
+    for (int p = _firstMissP; p < _limitMissP; p++) {
       // <p> is missing; update <theState->numMarkersSinceNonHetPar[p]>
       int totalNumSincePrev = numMarkersSincePrev;
       if (prevState->hetParent == 1 - p)
@@ -2889,7 +2879,6 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
       // See the note in the prevoius branch above <flipType>; here we flip the
       // values that will be newly added (as ambiguous alternatives) to be
       // consistent with those in <theState>
-      // those in <theState>.
       uint8_t flipType = ((theState->iv ^ fullIV) >> lowOrderChildBit) & 3;
       // if hetParent < 2, parentPhase flips differently: only have two
       // possibilities: flipped (1) or not (0):
@@ -2955,36 +2944,43 @@ bool Phaser::checkMinUpdate(uint64_t fullIV, uint64_t fullUnassigned,
     assert(theState->unassigned == (fullUnassigned | ambig1Unassigned));
   }
 
-  if (theStateUpdated) {
+  if (theStateUpdated && error) {
     // So that we don't get additional forced one hap trans states when:
-    // (1) we're getting to this state via an error (necessarily if (2)) and
-    // (2) one was just added for this previous state (i.e., between the
+    // (1) we're getting to this state via an error and
+    // (2) a state was just added for this previous state (i.e., between the
     //     current marker and the <prevState>'s marker)
     // ... set the number of markers since non het parent to be
     // CmdLineOpts::forceInformSeparation less than CmdLineOpts::forceInformInit
     // That way, we can get another forced informative marker every
     // CmdLineOpts::forceInformSeparation markers.
-    if (error && prevState->txToForcedInform > 0) {
-      // how many markers from prevHMMIndex is the forced informative marker?
-      // the forced informative marker is always immediately after
-      // <prevHMMIndex>:
-      int curHMMIndex = _hmmMarker.length() - 1;
-      int forcedHMMIndex = curHMMIndex - prevHMMIndex + 1;
-      assert(-prevHMMIndex + prevState->txToForcedInform < 0);
-      int forcedInformMarker = _hmmMarker[forcedHMMIndex];
-      uint8_t startP = 0;
-      uint8_t endP = 1;
 
-      int numMarkersSinceForced = _curMarker - forcedInformMarker;
-      int reducedNumSince = CmdLineOpts::forceInformInit -
-			    CmdLineOpts::forceInformSeparation +
-			    numMarkersSinceForced;
-      for(uint8_t p = startP; p <= endP; p++) {
-	theState->numMarkersSinceNonHetPar[p] =
-				    min(reducedNumSince,
-					theState->numMarkersSinceNonHetPar[p]);
-      }
+    // the (first) error marker is always immediately after <prevHMMIndex>:
+    int curHMMIndex = _hmmMarker.length() - 1;
+    int errorHMMIndex = curHMMIndex - prevHMMIndex + 1;
+    int errorInformMarker = _hmmMarker[errorHMMIndex];
+
+    // We want to reduce numMarkersSinceNonHetPar to no more than the sum of:
+    // (a) the distance to the error (don't accumulate since the error itself
+    // isn't evidence for not having an informative marker) and (b)
+    // (CmdLineOpts::forceInformInit - CmdLineOpts::forceInformSeparation) for
+    // the reasons given at the top of this block.
+    int numMarkersSinceError = _curMarker - errorInformMarker;
+    int reducedNumSince = CmdLineOpts::forceInformInit -
+			  CmdLineOpts::forceInformSeparation +
+			  numMarkersSinceError;
+    // We'll reduce both parents by the same amount and determine that amount
+    // here:
+    int reduceBy = 0;
+    for (uint8_t p = _firstMissP; p < _limitMissP; p++) {
+      if (reducedNumSince < theState->numMarkersSinceNonHetPar[p])
+	reduceBy = max(reduceBy,
+	            // we use this number so that when we do
+	            // numMarkersSinceNonHetPar[p] - reduceBy below, we get
+	            // numMarkersSinceNonHetPar[p] = reducedNumSince
+		    theState->numMarkersSinceNonHetPar[p] - reducedNumSince);
     }
+    for (uint8_t p = _firstMissP; p < _limitMissP; p++)
+      theState->numMarkersSinceNonHetPar[p] -= reduceBy;
   }
 
   return theStateUpdated;
@@ -3778,6 +3774,9 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 	  theFam->setUntransPar(m, untransParBits);
 	else if (curStat == PHASE_OK) {
 	  const PhaseVals &phase = theFam->getPhase(m);
+	  if (phase.hetParent == 2)
+	    continue;
+	  //assert(phase.hetParent == hetParent);
 	  assert(phase.homParentGeno == G_HOM0 || phase.homParentGeno ==G_HOM1);
 	  // See the earlier code that handles <assignOneHapTrans> during
 	  // backtracing
@@ -4062,6 +4061,13 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
   uint64_t curIVparDiff = (curState->iv & _parBits[0]) ^
 					    ((curState->iv & _parBits[1]) >> 1);
 
+  if (curState->hetParent < 2)
+    // Any IV values that differ between <curState->iv> and <lastAssignedIV>
+    // are uncertain at the current marker (up through <lastAssignedMarker>) if
+    // the parent transmitting those IV values is not heterozygous
+    uncertainIV |= (curState->iv ^ lastAssignedIV) &
+					      _parBits[1 - curState->hetParent];
+
   // for checking the special X marker/phase type case below
   uint64_t certainChildBits1[2];
   for(int sex = 0; sex < 2; sex++)
@@ -4085,7 +4091,8 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
       // We only apply this for startMarker + 1 and thereafter. The reason is
       // <startMarker> is informative and we *can* say which parent's haplotype
       // was transmitted there. That is, the recombination happened _after_
-      // <startMarker>, not _at_ it.
+      // <startMarker>, not _at_ it. But just above the loop, we make the IVs
+      // uncertain for the homozygous parent, if there is one.
       // (Corner case is when <startMarker> is <chrFirstMarker>, but there
       // curState->iv == lastAssignedIV and this next statement has no effect.)
       uncertainIV |= curState->iv ^ lastAssignedIV;

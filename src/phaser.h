@@ -543,10 +543,6 @@ struct State {
   // error state. Tracking whether some state leading to this one is an error
   // state allows us to prefer non-error state paths when there are ambiguities
   uint8_t  error;  // fits in 2 bits
-
-  // Track whether this State transitions to a forced informative marker. The
-  // value is 0 if it does not and 1 if it does.
-  uint8_t txToForcedInform; // fits in 1 bit
 };
 
 #endif // PHASER_H
