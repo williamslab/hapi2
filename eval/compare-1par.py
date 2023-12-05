@@ -6,10 +6,13 @@ import argparse
 
 parser = argparse.ArgumentParser(
     description="Compare inferred with true parent phase")
-parser.add_argument("-par", action="store", dest="par", type=str, default="dad")
-parser.add_argument("-dir", action="store", dest="dir", type=str)
+parser.add_argument("-true_dir", action="store", dest="true_dir", required=True, type=str)
+parser.add_argument("-inf_dir", action="store", dest="inf_dir", required=True, type=str)
+parser.add_argument("-par", action="store", dest="par", required=True, type=str)
 
 args = parser.parse_args()
+
+assert args.par == "dad" or args.par == "mom", "-par should be either 'dad' or 'mom'"
 
 
 def print_mismatch(parents, chr, marker_num, true, inf, codes):
@@ -21,13 +24,8 @@ def print_mismatch(parents, chr, marker_num, true, inf, codes):
   else:
     print("[None]")
 
-
-if args.dir is None:
-  args.dir = "2par-{}_miss".format(args.par)
-
-
-orig = simplejson.loads(open("2par-orig/parent_phase.json", 'rb').read().decode('utf-8'))
-inferred = simplejson.loads(open("{}/parent_phase.json".format(args.dir), 'rb').read().decode('utf-8'))
+orig = simplejson.loads(open(f"{args.true_dir}/parent_phase.json", 'rb').read().decode('utf-8'))
+inferred = simplejson.loads(open(f"{args.inf_dir}/parent_phase.json", 'rb').read().decode('utf-8'))
 
 for parents, inf_data in inferred.items():
   if parents == "marker" or parents == "physpos" or parents == "chr" \
