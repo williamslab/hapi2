@@ -22,6 +22,7 @@ dynarray< std::pair<uint8_t,uint64_t> > Phaser::_genos;
 Phaser::state_ht                Phaser::_stateHash;
 Phaser::BT_state_set            *Phaser::_curBTAmbigSet;
 Phaser::BT_state_set            *Phaser::_prevBTAmbigSet;
+Phaser::uint64_set              Phaser::_prevCanonIVsBT;
 PhaseMethod                     Phaser::_phaseMethod;
 uint8_t  Phaser::_parentData;
 uint64_t Phaser::_childrenData[5];
@@ -2661,6 +2662,39 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
 State * Phaser::lookupState(const uint64_t iv, const uint64_t allAmbig,
 			    const uint64_t unassigned,
 			    int &lowOrderChildBit) {
+  uint64_t lookupIV = getCanonicalIV(iv, allAmbig, unassigned,
+				     lowOrderChildBit);
+
+  //////////////////////////////////////////////////////////////////////////
+  // Do the lookup
+
+  iv_ambig_real theKey(lookupIV, allAmbig, unassigned);
+  state_ht_iter it = _stateHash.find( &theKey );
+  if (it == _stateHash.end()) {
+    // need to create state
+    State *newState = new State;
+    newState->ambig = allAmbig;
+    newState->unassigned = unassigned;
+    newState->minRecomb = UINT32_MAX;
+    newState->maxLikelihood = -FLT_MAX;
+    iv_ambig newStateKey = new iv_ambig_real(lookupIV, allAmbig, unassigned);
+    _stateHash[ newStateKey ] = newState;
+    int curHMMIndex = _hmm.length() - 1;
+    _hmm[curHMMIndex].append(newState);
+    // caller will assign other necessary values
+    return newState;
+  }
+  else {
+    return it->second;
+  }
+}
+
+// Returns the canonical inheritance vector value for <iv>. See the comment
+// just inside the function for how this is defined.
+uint64_t Phaser::getCanonicalIV(const uint64_t iv, const uint64_t allAmbig,
+				const uint64_t unassigned,
+				int &lowOrderChildBit) {
+
   // As inheritance vectors have four equivalent values, we have a fixed key
   // defined via the following convention:
   // (1) In the lowest order two bits for which <iv> is unambiguous and
@@ -2692,35 +2726,14 @@ State * Phaser::lookupState(const uint64_t iv, const uint64_t allAmbig,
 
   // Conveniently, we've got _flips indexed by the 4 possible flip types with
   // the values to flip assigned in each child:
-  uint64_t lookupIV = iv ^ (_flips[flipType] & unambig);
+  uint64_t canonIV = iv ^ (_flips[flipType] & unambig);
   // And we've done something analogous for ambiguous bits; must flip them too:
-  lookupIV ^= _ambigFlips[flipType] & ambigStd;
+  canonIV ^= _ambigFlips[flipType] & ambigStd;
 
   // Lastly, ensure that any unassigned IV values are 0:
-  lookupIV &= ~unassigned;
+  canonIV &= ~unassigned;
 
-  //////////////////////////////////////////////////////////////////////////
-  // Do the lookup
-
-  iv_ambig_real theKey(lookupIV, allAmbig, unassigned);
-  state_ht_iter it = _stateHash.find( &theKey );
-  if (it == _stateHash.end()) {
-    // need to create state
-    State *newState = new State;
-    newState->ambig = allAmbig;
-    newState->unassigned = unassigned;
-    newState->minRecomb = UINT32_MAX;
-    newState->maxLikelihood = -FLT_MAX;
-    iv_ambig newStateKey = new iv_ambig_real(lookupIV, allAmbig, unassigned);
-    _stateHash[ newStateKey ] = newState;
-    int curHMMIndex = _hmm.length() - 1;
-    _hmm[curHMMIndex].append(newState);
-    // caller will assign other necessary values
-    return newState;
-  }
-  else {
-    return it->second;
-  }
+  return canonIV;
 }
 
 int Phaser::lowOrderUnambigAssignedBit(const uint64_t allAmbig,
@@ -3372,6 +3385,14 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
   uint8_t oneHapTransHap[2] = { 0, 0 };
   uint64_t oneHapTransOutlierIV[2] = { 0, 0 };
 
+  // To avoid including equivalent state paths where the parents are
+  // flipped, we track the canonical IVs we've already applied at each state
+  //
+  // did we see an inverted IV (see below for when this is reset)
+  bool sawAmbigInverse = false;
+  // what is the most recent HMM index that has an inverted state?
+  int mostRecentInvIdx = -1;
+
   // Number of recombinations in <curState> relative to <prevState> below
   uint16_t numRecombs; // TODO: optimization: do we want this?
   int lastAssignedMarker = chrLastMarker + 1; // technically not assigned yet
@@ -3419,73 +3440,110 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 					  (!_onChrX || curHomParGeno != G_MISS);
     uint8_t ambigHomParGeno = 0;
 
+    if (_missingPar == 3) {
+      _prevCanonIVsBT.clear();
+      int dontcare;
+      uint64_t canonIV = getCanonicalIV(curState->iv, curState->ambig,
+					curState->unassigned, dontcare);
+      _prevCanonIVsBT.insert(canonIV);
+    }
+
     // Find all the possible parent phase types that have equal and minimal
     // numbers of recombinations at this marker and append their previous states
     // to <_prevIdxSet>.
+    int numAppliedStates = 0;
     for(state_set_iter it = _curBTAmbigSet->begin(); it !=_curBTAmbigSet->end();
 									it++) {
       if (CmdLineOpts::verbose)
 	fprintf(log, " %d", it->stateIdx);
       State *ambigState = _hmm[hmmIndex][ it->stateIdx ];
-      uint64_t ivDiffBits = curState->iv ^ it->iv;
+      // decide if it->iv has opposite parent assignments relative to any we
+      // are applying
+      bool isInverse = false;
+      if (_missingPar == 3) {
+	// invert which parent transmitted the IVs:
+	uint64_t invertedIV = ((it->iv << 1) & _parBits[1]) |
+			      ((it->iv >> 1) & _parBits[0]);
+	int dontcare;
+	uint64_t canonIV = getCanonicalIV(invertedIV, it->ambig,
+					  /*unassigned=*/ 0, dontcare);
+	auto it2 = _prevCanonIVsBT.find(canonIV);
+	if (it2 != _prevCanonIVsBT.end())
+	  isInverse = true;
 
-      for (uint8_t p = _firstMissP; p < _limitMissP; p++) {
-	if (firstFullyAssignedIndex[p] < 0 &&
-					  ambigState->unassigned == _parBits[p])
-	  firstFullyAssignedIndex[p] = prevHmmIndex;
+	if (!isInverse) {
+	  // we _will_ back traced to this state: store its canonical IV
+	  canonIV = getCanonicalIV(it->iv, it->ambig, /*unassigned=*/ 0,
+				   dontcare);
+	  _prevCanonIVsBT.insert(canonIV);
+	}
       }
+      sawAmbigInverse = sawAmbigInverse || isInverse;
+      if (isInverse)
+	  mostRecentInvIdx = hmmIndex;
+      if (!isInverse) {
+	uint64_t ivDiffBits = curState->iv ^ it->iv;
 
-      bool thisStateParFlip = false;
-      if (parArbitraryRun) {
-	// Only remains arbitrary if the following conditions hold (see longer
-	// comment above when parArbtitrary run is first set true)
-	// (1) All differing bits different for both parents?
-	// (2) All non-diff (same) bits the opposite of each other in the IV?
-	// (3) The ambig IV values (curState->ambig and it->ambig) match
-	uint64_t ivExpectOppositeBits = ~(ivDiffBits | it->ambig);
-	uint64_t ivValsExpOpp = it->iv & ivExpectOppositeBits;
-	thisStateParFlip = curState->ambig == it->ambig &&
+	numAppliedStates++;
+
+	for (uint8_t p = _firstMissP; p < _limitMissP; p++) {
+	  if (firstFullyAssignedIndex[p] < 0 &&
+					  ambigState->unassigned == _parBits[p])
+	    firstFullyAssignedIndex[p] = prevHmmIndex;
+	}
+
+	bool thisStateParFlip = false;
+	if (parArbitraryRun) {
+	  // Only remains arbitrary if the following conditions hold (see longer
+	  // comment above when parArbtitrary run is first set true)
+	  // (1) All differing bits different for both parents?
+	  // (2) All non-diff (same) bits the opposite of each other in the IV?
+	  // (3) The ambig IV values (curState->ambig and it->ambig) match
+	  uint64_t ivExpectOppositeBits = ~(ivDiffBits | it->ambig);
+	  uint64_t ivValsExpOpp = it->iv & ivExpectOppositeBits;
+	  thisStateParFlip = curState->ambig == it->ambig &&
 	      ((ivDiffBits >> 1) & _parBits[0]) == (ivDiffBits & _parBits[0]) &&
 	      (((ivValsExpOpp >> 1) ^ ivValsExpOpp) & _parBits[0]) ==
 					  (_parBits[0] & ivExpectOppositeBits);
-	if (!thisStateParFlip &&
-	    (ivDiffBits > 0 || curState->ambig != it->ambig)) {
-	  parArbitraryRun = false;
-	  curArbitraryPar = 1;
+	  if (!thisStateParFlip &&
+	      (ivDiffBits > 0 || curState->ambig != it->ambig)) {
+	    parArbitraryRun = false;
+	    curArbitraryPar = 1;
+	  }
 	}
-      }
 
-      if (!thisStateParFlip) {
-	ivFlippable |= ivDiffBits;
+	if (!thisStateParFlip) {
+	  ivFlippable |= ivDiffBits;
 
-	curAmbigParHet |= ambigState->ambigParHet;
-	curAmbigParPhase |= it->ambigParPhase;
-	curArbitraryPar |= ambigState->arbitraryPar;
-      }
-
-      if (_onChrX) {
-	// On chrX, if dad is missing data, he is imputed using daughters; if,
-	// for example, there's only one daughter and she is heterozygous and
-	// _may_ have recombined relative to the previous marker, there's no
-	// information to tell us which allele is from Mom -- she could have
-	// transmitted either. Note that, this case -- which came up in
-	// simulated data -- arises when there is a recombination that becomes
-	// certain to have occurred once we encounter a marker where the
-	// recombined daughter is homozygous, but it may or may not have
-	// occurred at any markers between sites where she is homozygous.
-	if (homParGenoAssigned && ambigState->homParentGeno != curHomParGeno) {
-	  curHomParGeno = G_MISS;
-	  homParGenoAssigned = false;
+	  curAmbigParHet |= ambigState->ambigParHet;
+	  curAmbigParPhase |= it->ambigParPhase;
+	  curArbitraryPar |= ambigState->arbitraryPar;
 	}
-      }
-      else if (ambigState->hetParent < 2 || (ambigState->ambigParHet & 3) !=0) {
-	assert(ambigState->homParentGeno != G_MISS);
-	if (!homParGenoAssigned) {
-	  curHomParGeno = ambigState->homParentGeno;
-	  homParGenoAssigned = true;
+
+	if (_onChrX) {
+	  // On chrX, if dad is missing data, he is imputed using daughters; if,
+	  // for example, there's only one daughter and she is heterozygous and
+	  // _may_ have recombined relative to the previous marker, there's no
+	  // information to tell us which allele is from Mom -- she could have
+	  // transmitted either. Note that, this case -- which came up in
+	  // simulated data -- arises when there is a recombination that becomes
+	  // certain to have occurred once we encounter a marker where the
+	  // recombined daughter is homozygous, but it may or may not have
+	  // occurred at any markers between sites where she is homozygous.
+	  if (homParGenoAssigned && ambigState->homParentGeno != curHomParGeno) {
+	    curHomParGeno = G_MISS;
+	    homParGenoAssigned = false;
+	  }
 	}
-	else
-	  ambigHomParGeno |= curHomParGeno ^ ambigState->homParentGeno;
+	else if (ambigState->hetParent < 2 || (ambigState->ambigParHet & 3) !=0) {
+	  assert(ambigState->homParentGeno != G_MISS);
+	  if (!homParGenoAssigned) {
+	    curHomParGeno = ambigState->homParentGeno;
+	    homParGenoAssigned = true;
+	  }
+	  else
+	    ambigHomParGeno |= curHomParGeno ^ ambigState->homParentGeno;
+	}
       }
 
       // Add the previous state index(es) to <_prevIdxSet> so long as the
@@ -3503,6 +3561,26 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 			     dontcare1, dontcare2);
       }
     }
+    if (sawAmbigInverse) {
+      if (numAppliedStates > 1)
+	// set P flag: one of the ambiguous paths leads to inverted parents
+	// at a later marker. Want to ensure that the arbitrarily chosen
+	// path is indicated as arbitrary for the parent
+	curArbitraryPar = 1;
+      else if (mostRecentInvIdx > hmmIndex) {
+	// stop run of P-ambig markers
+	sawAmbigInverse = false;
+	// ensure that the next marker has arbitrary parent choice (in some
+	// cases it won't get marked above, but it definitely does have P
+	// status)
+	theFam->setArbitraryPar(_hmmMarker[mostRecentInvIdx]);
+	mostRecentInvIdx = -1;
+      }
+      else if (mostRecentInvIdx < 0) {
+	assert(false);
+      }
+    }
+
 
     // Decide whether to assign one hap trans for each missing data parent
     // TODO: can this assign one hap trans for dads on chrX?

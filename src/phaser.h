@@ -95,6 +95,8 @@ class Phaser {
       BT_ambig_info empty(UINT32_MAX, UINT64_MAX, 2, 1, 1);
       _curBTAmbigSet->set_empty_key(empty);
       _prevBTAmbigSet->set_empty_key(empty);
+      // IV 11 (binary) == 3 is an impossible canonical IV
+      _prevCanonIVsBT.set_empty_key(3);
 
       int maxMarkers = 0;
       for(int c = 0; c < Marker::getNumChroms(); c++)
@@ -193,6 +195,9 @@ class Phaser {
     static State * lookupState(const uint64_t iv, const uint64_t ambig,
 			       const uint64_t unassigned,
 			       int &lowOrderChildBit);
+    static uint64_t getCanonicalIV(const uint64_t iv, const uint64_t ambig,
+				   const uint64_t unassigned,
+				   int &lowOrderChildBit);
     static int lowOrderUnambigAssignedBit(const uint64_t allAmbig,
 					  const uint64_t unassigned,
 					  uint64_t &unambig,
@@ -328,6 +333,17 @@ class Phaser {
     static BT_state_set *_curBTAmbigSet;
     static BT_state_set *_prevBTAmbigSet;
 
+    struct equint64_t {
+      bool operator()(uint64_t k1, uint64_t k2) const {
+	return k1 == k2;
+      }
+    };
+    typedef typename google::dense_hash_set<uint64_t, std::hash<uint64_t>,
+					    equint64_t> uint64_set;
+    // For back tracing and tracking canonical IVs (whereby we don't treat
+    // equivalent but opposite parent-labeled states as ambiguous)
+    static uint64_set _prevCanonIVsBT;
+
     // What type of phasing are we doing?
     static PhaseMethod _phaseMethod;
 
@@ -372,15 +388,6 @@ class Phaser {
     // marker? Assigned -1 when there has not been a forced informative marker
     // since the last "real" marker
     static int _lastRealInformIndex;
-    // For introducing forced informative markers, which state indexes need such
-    // a marker?
-    struct equint32_t {
-      bool operator()(uint32_t k1, uint32_t k2) const {
-	return k1 == k2;
-      }
-    };
-    typedef typename google::dense_hash_set<uint32_t, std::hash<uint32_t>,
-					    equint32_t> uint32_set;
 
     // What marker number and _hmm index is the most recent forced informative
     // marker. Assigned -1 when not in a one hap trans region.
