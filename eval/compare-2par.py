@@ -44,8 +44,8 @@ def finishPregionOrChrom(parents, chr, mismatchRecords, the_orientation,
                 else:
                     print(f"Parent assignment {parents}-chr{chr} {first_marker} to {last_marker}: swapped")
             the_p_regions[chr].append(
-                (first_marker, last_marker, len(mismatchRecords[0]), len(mismatchRecords[1]),
-                 num_data_this_region[0].copy(), num_data_this_region[1].copy())
+                [first_marker, last_marker, len(mismatchRecords[0]), len(mismatchRecords[1]),
+                 num_data_this_region[0].copy(), num_data_this_region[1].copy()]
             )
 
     lowerTally = len(mismatchRecords[betterParOrient])
@@ -198,7 +198,7 @@ def compare_marker(true, inf, curChr, marker_idx, inf_codes, par_orient,
             phase_orientation[par_orient][parent].append(-1)
 
 
-# Find mismatches / errors for the family whose parents are parentsStr
+# TODO: comment
 def analyze_family(parentsStr, true, inferred, inf_data, parentsToExamine, do_print=True):
     # dad and mom's phase
     true_phase = true[parentsStr]["parhaps"]
