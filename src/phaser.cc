@@ -300,6 +300,7 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
     if (_onChrX && (_missingPar & 2) && (mt & (1 << MT_FI_1)) &&
 	_curMarker - firstMarker >= CmdLineOpts::forceInformInit) {
       if (checkForceInform()) {
+	forceInform = 1;  // force only for Mom (chrX)
 	// will add a new marker later, and its index is this:
 	_lastForceInformIndex = _hmmMarker.length();
 	_lastForceInformMarker = _curMarker;
@@ -317,15 +318,12 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
     // missing parent often mean that that parent has transmitted only one
     // haplotype to the children. Force an informative marker after
     // sufficiently long stretch.
-    // Check for the need to force an informative marker if either
-    // _lastRealInformIndex < 0 -- i.e., there has not been a forced
-    // informative marker since the most recent "real" one -- or if there have
-    // been at least CmdLineOpts::forceInformSeparation markers since the last
+    // Check for the need to force an informative marker: have there been
+    // at least CmdLineOpts::forceInformSeparation markers since the last
     // forced one.
     else if (!_onChrX && _missingPar > 0 &&
-	     (_lastRealInformIndex < 0 ||
-	      (_curMarker - _lastInformMarker) >=
-					  CmdLineOpts::forceInformSeparation) &&
+	     (_curMarker - _lastForceInformMarker) >=
+					  CmdLineOpts::forceInformSeparation &&
 	     // need it to be possible for this marker to be heterozygous for
 	     // the OHT parent
 	     ( (mt & 1 << MT_PI) || (mt & (1 << MT_FI_1)) ) &&
@@ -389,14 +387,21 @@ int Phaser::getMarkerType_prelimAnalyses(NuclearFamily *theFam,
 	  // any penalties. Always adding a forced informative marker of all
 	  // the parent het types ensures that all paths get penalized.
 	  forceInform = 2;
+	  // will add a new marker later, and its index is this:
+	  _lastForceInformIndex = _hmmMarker.length();
+	  _lastForceInformMarker = _curMarker;
 	  break;
 	}
       }
 
-      if (lastHmmIdx < 0)
+      if (lastHmmIdx < 0) {
 	// no previous state => no informative marker though we've passed
 	// CmdLineOpts::forceInformInit markers: should force one
 	forceInform = 2;
+	// will add a new marker later, and its index is this:
+	_lastForceInformIndex = _hmmMarker.length();
+	_lastForceInformMarker = _curMarker;
+      }
       else if (forceInform >= 0 && _lastRealInformIndex < 0)
 	_lastRealInformIndex = lastHmmIdx;
     }
@@ -1866,6 +1871,7 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
   // Which children were ambiguous in the previous state but not here?
   // Also various values relating to ambig1 type ambiguous values
   uint64_t stdAmbigOnlyPrev, ambig1PrevInfo, ambig1Unassigned;
+  uint64_t origFullIV = fullIV;
   fixRecombFromAmbigIVambigPar(prevState, fullIV, fullAmbig, recombs, parRecombs,
 		    isPI, IVambigPar,
 		    /*ambigOnlyPrev=*/prevState->ambig & ~fullAmbig, hetParent,
@@ -1895,6 +1901,10 @@ void Phaser::mapPrevToFull(const State *prevState, uint8_t prevHMMIndex,
     // Above considered default and state with both parents' phase inverted.
     // Now consider the two states in which each parent alone has inverted
     // phase.
+
+    // corner case can lead to a fullIV with both parents' phase inverted, but
+    // below code assumes it has default phase; restore the original:
+    fullIV = origFullIV;
 
     ///////////////////////////////////////////////////////////////////////////
     // Generate the <fullIV> and <fullAmbig> values for parent 0 flipped:
@@ -2479,6 +2489,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
     // See comment below in the analogous operation regarding <ambig1PrevInfo>.
     // Finally, don't inadvertently introduce recombinations by flipping values
     // that aren't assigned in the previous state.
+    // Note: recombs is not accessed below when numIter == 1 (as it does here)
     recombs ^= _parBits[ hetParent ] & ~(fullAmbig | (isPI * ambig1PrevInfo) |
 							prevState->unassigned);
     size_t curCount[2]; // current count of number of recombinations
