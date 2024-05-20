@@ -77,12 +77,12 @@ int main(int argc, char **argv) {
     }
 
     fprintf(out, "Errors:\t\t\t");
-    if (CmdLineOpts::maxNoErrRecombs == 0)
+    if (CmdLineOpts::minErrRecombs == 0)
       fprintf(out, "disabled\n\n");
     else {
       fprintf(out, "enabled\n");
       fprintf(out, "Number of recombinations to trigger error:\t%d\n",
-	      CmdLineOpts::maxNoErrRecombs);
+	      CmdLineOpts::minErrRecombs);
       fprintf(out, "Maximum informative markers per error:\t\t%d\n",
 	      CmdLineOpts::errorLength);
       fprintf(out, "\n");

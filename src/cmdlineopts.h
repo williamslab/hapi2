@@ -91,7 +91,7 @@ class CmdLineOpts {
 
     // Introduce an error state if doing so saves at least this many
     // recombinations. 0 disables.
-    static int maxNoErrRecombs;
+    static int minErrRecombs;
 
     // Number of successive informative markers that can be treated as errors
     // (Really the number of markers back to look for a potential previous

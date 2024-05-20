@@ -10,7 +10,7 @@
 #include <genetio/marker.h>
 #include "cmdlineopts.h"
 
-#define DEFAULT_NO_ERROR_MAX	2
+#define DEFAULT_ERROR_MIN	2
 #define DEFAULT_ERROR_LENGTH    5
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -33,7 +33,7 @@ char *CmdLineOpts::onlyChr = NULL;
 int   CmdLineOpts::startPos = 0;
 int   CmdLineOpts::endPos = INT_MAX;
 int   CmdLineOpts::forceWrite = 0;
-int   CmdLineOpts::maxNoErrRecombs = DEFAULT_NO_ERROR_MAX;
+int   CmdLineOpts::minErrRecombs = DEFAULT_ERROR_MIN;
 uint8_t CmdLineOpts::errorLength = DEFAULT_ERROR_LENGTH;
 int   CmdLineOpts::bothParHetThreshold = 75;
 int   CmdLineOpts::forceInformInit = 150;
@@ -52,7 +52,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
   enum {
     START_POS = CHAR_MAX + 1,
     END_POS,
-    NO_ERROR_MAX,
+    ERROR_MIN,
     ERROR_DIST,
     DETECT_CO,
     EDGE_CO,
@@ -83,7 +83,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
     {"chr", required_argument, NULL, 'c'},
     {"start", required_argument, NULL, START_POS},
     {"end", required_argument, NULL, END_POS},
-    {"no_err_max", required_argument, NULL, NO_ERROR_MAX},
+    {"err_min", required_argument, NULL, ERROR_MIN},
     {"err_dist", required_argument, NULL, ERROR_DIST},
 //    {"impute2", no_argument, &CmdLineOpts::useImpute2Format, 1},
     {"no_family_id", no_argument, &CmdLineOpts::noFamilyId, 1},
@@ -212,16 +212,16 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	  exit(2);
 	}
 	break;
-      case NO_ERROR_MAX:
-	maxNoErrRecombs = strtol(optarg, &endptr, 10);
+      case ERROR_MIN:
+	minErrRecombs = strtol(optarg, &endptr, 10);
 	if (errno != 0 || *endptr != '\0') {
-	  fprintf(stderr, "ERROR: unable to parse no_err_max option as integer\n");
+	  fprintf(stderr, "ERROR: unable to parse err_min option as integer\n");
 	  if (errno != 0)
 	    perror("strtol");
 	  exit(2);
 	}
-	if (maxNoErrRecombs < 0) {
-	  fprintf(stderr, "ERROR: no_err_max option must not be negative\n");
+	if (minErrRecombs < 0) {
+	  fprintf(stderr, "ERROR: err_min option must not be negative\n");
 	  exit(2);
 	}
 	break;
@@ -237,7 +237,7 @@ bool CmdLineOpts::parseCmdLineOptions(int argc, char **argv) {
 	  if (providedErrLength <= 0) {
 	    fprintf(stderr, "ERROR: err_dist option must be greater than 0\n");
 	    if (providedErrLength == 0) {
-	      fprintf(stderr, "       to disable error detection, use --no_err_max 0\n");
+	      fprintf(stderr, "       to disable error detection, use --err_min 0\n");
 	    }
 	    exit(2);
 	  }
@@ -450,13 +450,14 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "  --min_child <#>\tOnly analyze families with at least this many children\n");
 //  fprintf(out, "\t\t\tDefault: 2.\n");
   fprintf(out, "\n");
-  fprintf(out, "  --no_err_max <#>\tMaximum number of recombinations attributable to a\n");
-  fprintf(out, "\t\t\tsingle marker before it is called an error. Default: %d.\n",
-	  DEFAULT_NO_ERROR_MAX);
-  fprintf(out, "\t\t\t0 disables; 1 calls single marker non-crossovers errors\n");
+  fprintf(out, "  --err_min <#>\t\tMinimum number of recombinations attributable to a\n");
+  fprintf(out, "\t\t\tseries of --err_dist informative markers to be called\n");
+  fprintf(out, "\t\t\tan error.  Default: %d. Use 0 to disable\n",
+	  DEFAULT_ERROR_MIN);
   fprintf(out, "  --err_dist <#>\tMaximum number of sequential informative markers that\n");
-  fprintf(out, "\t\t\tcan be called as an error. Default: %d.\n",
+  fprintf(out, "\t\t\tcan be called as an error.  Default: %d.\n",
 	  DEFAULT_ERROR_LENGTH);
+  fprintf(out, "\n");
   fprintf(out, "  --edge_co <#>\t\tAllow detection of the \"background haplotype\" with fewer\n");
   fprintf(out, "\t\t\tthan --detect_co markers at start/end of chromosomes.\n");
   fprintf(out, "\t\t\tA child must have a sequence of this many informative\n");

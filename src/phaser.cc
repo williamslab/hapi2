@@ -1496,10 +1496,10 @@ void Phaser::addStatesWithPrev(const dynarray<State> &partialStates,
 
   /////////////////////////////////////////////////////////////////////////////
   // Introduce error states in prevStates if doing so saves at least
-  // <CmdLineOpts::maxNoErrRecombs> recombinations
+  // <CmdLineOpts::minErrRecombs> recombinations
   // Only want to do this for "real" informative markers, not forced
   // informative markers, so we ensure <lastPrev> is true.
-  if (CmdLineOpts::maxNoErrRecombs > 0 && lastPrev) {
+  if (CmdLineOpts::minErrRecombs > 0 && lastPrev) {
     // Start <it> at begin() + <numPrevErrorStatesAdded> to skip that number of
     // states: these are for states added in the context of the current marker
     // and were just mapped from above (as non-error states)
@@ -1663,7 +1663,7 @@ void Phaser::addStatesNoPrev(const dynarray<State> &partialStates,
     if (error) {
       newState->error = 1;
       // see comment above State::minRecomb (phaser.h) for why this calculation:
-      newState->minRecomb = CmdLineOpts::maxNoErrRecombs * 10 - 5;
+      newState->minRecomb = CmdLineOpts::minErrRecombs * 10 - 5;
       // Prefer paths that include a smaller number of markers indicated as
       // erroneous; do this by very slightly adjusting the error term depending
       // on the number of markers being spanned
@@ -2571,7 +2571,7 @@ void Phaser::updateStates(uint64_t fullIV, uint64_t fullAmbig,
       if (error) {
 	// error state: apply penalty see comment above State::minRecomb
 	// (phaser.h) for why this:
-	totalRecombs += CmdLineOpts::maxNoErrRecombs * 10 - 5;
+	totalRecombs += CmdLineOpts::minErrRecombs * 10 - 5;
 	// Prefer paths that include a smaller number of markers indicated as
 	// erroneous; do this by very slightly adjusting the error term
 	// depending on the number of markers being spanned. Note that
@@ -3483,7 +3483,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 	  isInverse = true;
 
 	if (!isInverse) {
-	  // we _will_ back traced to this state: store its canonical IV
+	  // we _will_ back trace to this state: store its canonical IV
 	  canonIV = getCanonicalIV(it->iv, it->ambig, /*unassigned=*/ 0,
 				   dontcare);
 	  _prevCanonIVsBT.insert(canonIV);
@@ -3694,7 +3694,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 	theFam->setStatus(/*marker=*/ _hmmMarker[theHMMIndex],
 			  PHASE_ERR_RECOMB, _genos[theHMMIndex].first,
 			  childrenData, missing);
-	// <curState->prevState> references a state two indexes back
+	// <curState->prevState> references a state >1 indexes back
 	deleteStates(_hmm[theHMMIndex]);
       }
       // skip the number the error markers above
@@ -3731,7 +3731,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
       // Both the following are equivalent, but now we do something different
       // as noted next
 //      numRecombs = curState->minRecomb - prevState->minRecomb -
-//			  (curState->error & 1) * CmdLineOpts::maxNoErrRecombs;
+//			  (curState->error & 1) * CmdLineOpts::minErrRecombs;
 //      numRecombs = curState->maxPrevRecomb;
       // Changes in IV when a child is ambig1 induce a recombination that is
       // counted at a later marker than it originally occurred. The
