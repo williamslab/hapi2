@@ -1,5 +1,5 @@
 CPPSRCS= main.cc cmdlineopts.cc phaser.cc analysis.cc swapphase.cc
-CSRCS= memcpy.c
+CSRCS=
 OBJS= $(patsubst %.cc,%.o,$(CPPSRCS)) $(patsubst %.c,%.o,$(CSRCS))
 EXEC= hapi2
 
@@ -7,6 +7,7 @@ GPP = g++
 GCC = gcc
 DEFINES= 
 CFLAGS = -Wall $(DEFINES)
+CFLAGS += -I.
 CPPFLAGS = -std=c++2a $(CFLAGS)
 ifdef DEBUG           # to use run `make DEBUG=1`
   CFLAGS += -g
@@ -19,7 +20,9 @@ ifdef PROFILE       # to use run `make PROFILE=1
   CFLAGS += -pg
 endif
 
-LIBS = -static-libstdc++ -static-libgcc -lgenetio -lz -lhts -lpthread -Wl,--wrap=memcpy
+#LIBS = -static-libstdc++ -static-libgcc -lgenetio -lz -lhts -lpthread -Wl,--wrap=memcpy
+LIBS = -lgenetio -lz # -lhts -lpthread
+LIBS += -L./genetio
 
 # dependency variables / commands
 DEPDIR = .deps
