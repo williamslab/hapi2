@@ -425,9 +425,9 @@ void CmdLineOpts::printUsage(FILE *out, char *programName) {
   fprintf(out, "\n");
   fprintf(out, "3. RESULTS TO PRINT - ONE OR MORE OF:\n");
   fprintf(out, "  --vcf\t\t\tVCF format haplotypes\n");
+  fprintf(out, "  --json, --json_par\tJSON format haplotypes or parent haplotypes\n");
   fprintf(out, "  --ped\t\t\tPLINK ped format haplotypes\n");
   fprintf(out, "  --txt\t\t\tText format haplotypes\n");
-  fprintf(out, "  --json, --json_par\tJSON format haplotypes or parent haplotypes\n");
   fprintf(out, "\n");
   fprintf(out, "  --iv\t\t\tInheritance vector data in CSV format\n");
   fprintf(out, "  --detect_co <#>\tDetect crossover events\n");
