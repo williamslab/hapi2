@@ -753,9 +753,11 @@ int Phaser::getMarkerTypeAuto(uint8_t parentGenoTypes, uint8_t childGenoTypes,
 // <imputeUninfHomPar> gives the homozygous genotype of the mom (who is either
 // heterozygous or homozygous). (Except for <specialXMT> described next.)
 //
-// Also determines whether this is a special marker type that could be fully
-// informative or uninformative and where decisions about how to assign the
-// parents' genotypes get deferred until backtracing.
+// Also determines whether this is a special marker type that could be
+// uninformative or fully informative. However, due to various ambiguities,
+// when the children's IV fits a specific pattern, we can only infer one allele
+// for the mother and none for the father. In this case, decisions about how to
+// assign the parents' genotypes get deferred until backtracing.
 int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t &homParGeno,
 			   uint8_t &imputeUninfHomPar, bool &specialXMT) {
   // ensure only first four bits set and that dad (lowest order 3 bits) is not
@@ -819,6 +821,10 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t &homParGeno,
 	      // homozygous for the same genotype or all should be heterozygous
 	      // (or could be missing). Having both types implies a Mendelian
 	      // error
+	      return 1 << MT_ERROR;
+	    if ((momGeno == G_HOM0 && femaleChildHom1 > 0) ||
+		(momGeno == G_HOM1 && femaleChildHom0 > 0))
+	      // Female homozygotes must have the same genotype as the mother
 	      return 1 << MT_ERROR;
 	    // impute dad:
 	    homParGeno = (femaleChildHom0) ? G_HOM0 : G_HOM1;
@@ -980,7 +986,7 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t &homParGeno,
 	  else {
 	    if (homParGeno == G_MISS && _childSexes[0] > 0) {
 	      // Special X marker type here -- corner case which is:
-	      // - all daughters are het (otherwise homParGeno != G_MISS)
+	      // - all daughters are het/missing (otherwise homParGeno!= G_MISS)
 	      // - at least one son is non-missing (otherwise MT_AMBIG)
 	      // - all sons must have the same homozygous genotype or
 	      //   <momMustBeHet> would be true
@@ -992,7 +998,17 @@ int Phaser::getMarkerTypeX(uint8_t childGenoTypes, uint8_t &homParGeno,
 	      // we'll initially assume that the site is uninformative and then
 	      // during backtracing, check the surrounding IVs to see if it's
 	      // possible for Mom to be FI without introducing more
-	      // recombinations
+	      // recombinations. In the latter case, the parents' genotypes
+	      // become almost entirely ambiguous with only one allele (the
+	      // one the mom transmitted to the son/s) being deducible.
+	      // See the back tracing code for the specifics of when the site
+	      // becomes ambiguous. (Briefly, the sons must have the same IV
+	      // value, which implies only one of the mother's alleles. At the
+	      // same time, the daughters must all have inherited the same IV
+	      // value from the mother _that differs_ from the one transmitted
+	      // to the sons. This now is analogous to the case where there are
+	      // no sons and the daughters are all heterozygous: which allele
+	      // the mother transmitted to them is ambiguous.
 	      // we'll store the homozygous type dad would have if the marker
 	      // is uninformative (opposite the sons' homozygous type)
 	      homParGeno = ( (_childrenData[ G_HOM0 ] & _childSexes[0]) > 0 ) ?
@@ -2213,7 +2229,7 @@ void Phaser::fixRecombFromAmbigIVambigPar(const State *prevState,
   // alternate phase type in updateStates(), the children that recombined/didn't
   // will be inverted. We therefore use <ambig1PrevInfo> to store which
   // ambig1Unassigned bits to flip later in updateStates():
-  ambig1PrevInfo += (1 - isPI) * ambig1OnlyPrev & _parBits[homozyParent];
+  ambig1PrevInfo += (1 - isPI) * (ambig1OnlyPrev & _parBits[homozyParent]);
   ambig1Unassigned = (1 - isPI) * (ambig1PrevInfo &
 					      parRecombsFromAmbig[ hetParIdx ]);
 
@@ -3356,34 +3372,38 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
   if (_curBTAmbigSet->size() == 1 && _missingPar == 3) {
     state_set_iter it = _curBTAmbigSet->begin();
 
-    // Parent heterozygosity is necessarily ambiguous when:
-    // - For children whose IV values differ, the transmitted haplotypes from
-    //   both parents differ.
-    // - If two different states' IV values match, the parent haplotype
-    //   transmissions are opposite each other for the individual child. That is
-    //   each such child received AB or BA. See <ivValsExpOpp>.
-    //   Note this doesn't apply to ambiguous IV values stored in the ambig
-    //   field of the state. These necessarily aren't informative about the
-    //   parents as they can take on two different values.
-    // - Ambig IV values match between the states
+    // Which parent is which is necessarily ambiguous when:
+    // (1) For any child with one IV element that differs between <curStateIdx>
+    //     and the state in _curBTAmbigSet (henceforth <*it>), both elements
+    //     must differ.
+    // (2) For any child whose IV elements both match in <curStateIdx> and <*it>
+    //     those IV values must be opposite each other. That is, each such child
+    //     must have received AB or BA. See <ivValsExpOpp>.
+    //     Note this doesn't apply to ambiguous IV values stored in the ambig
+    //     field of the state. These necessarily aren't informative about the
+    //     parents as they can take on two different values that are opposite
+    //     each other and correspond to opposite parent phase assignments.
+    // (3) Ambig IV values match between the states
     // It's non-trivial to argue for ambiguity here, but: if all children are
     // AB and BA, the marker is certainly ambiguous as to which parent is
     // heterozygous. When a recombination happens from a marker where all
     // children are AB or BA, it can be attributed to either parent. This yields
-    // either AA or BB and these two IV values satisfy the first condition
-    // above. Ambiguous IV values are similar to the first case: the child has
-    // one of two different IV values that are consistent with two possible
-    // phase assignments in the parents.
+    // either AA or BB and these two IV values correspond to opposite parent
+    // genotype assignments.
 
     uint64_t curIV = _hmm[lastIndex][curStateIdx]->iv;
-    uint64_t ambigIV = it->iv;
-    uint64_t ivDiffBits = curIV ^ ambigIV;
+    uint64_t altIV = it->iv;
+    uint64_t ivDiffBits = curIV ^ altIV;
     // Which bits do we expect to have opposite values for?
     uint64_t ivExpectOppositeBits = ~(ivDiffBits | it->ambig);
-    uint64_t ivValsExpOpp = ambigIV & ivExpectOppositeBits;
-    parArbitraryRun = _hmm[lastIndex][curStateIdx]->ambig == it->ambig &&
-	      ((ivDiffBits >> 1) & _parBits[0]) == (ivDiffBits & _parBits[0]) &&
-	      (((ivValsExpOpp >> 1) ^ ivValsExpOpp) & _parBits[0]) ==
+    uint64_t ivValsExpOpp = altIV & ivExpectOppositeBits;
+    parArbitraryRun =
+	// condition (3):
+	_hmm[lastIndex][curStateIdx]->ambig == it->ambig &&
+	// condition (1)
+	((ivDiffBits >> 1) & _parBits[0]) == (ivDiffBits & _parBits[0]) &&
+	// condition (2)
+	(((ivValsExpOpp >> 1) ^ ivValsExpOpp) & _parBits[0]) ==
 					  (_parBits[0] & ivExpectOppositeBits);
 
   }
@@ -3745,9 +3765,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     else
       numRecombs = 0;
 
-    // Missing genotype value is 01 (not any other); 5 = 0101; 10 = 1010; so:
     uint8_t parentData = _genos[hmmIndex].first;
-    uint8_t parMissing = (parentData & 5) & ~((parentData & 10) >> 1);
     uint64_t childrenData = _genos[hmmIndex].second;
     uint64_t missing = (childrenData & _parBits[0]) &
 					  ~((childrenData & _parBits[1]) >> 1);
@@ -3761,7 +3779,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
     assert(!ambigHomParGeno);
     theFam->setPhase(_hmmMarker[hmmIndex], curState->iv,
 		     curState->ambig & _parBits[1], missing, ivFlippable,
-		     parMissing, curState->hetParent, curHomParGeno,
+		     parentData, curState->hetParent, curHomParGeno,
 		     // comment above State::minRecomb (phaser.h) for why /10:
 		     curState->parentPhase, numRecombs / 10, curAmbigParHet,
 		     curAmbigParPhase, curArbitraryPar);
@@ -3845,7 +3863,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
       int8_t homParent = p;
       int8_t hetParent = 1 - homParent;
       int8_t untransHap = 1 - oneHapTransHap[p];
-      // have 4 untransParBits: first two for parent 0, second two for parent 1
+      // have 4 untransParBits: first two for parent 0, second two for parent 1.
       // we shift to the appropriate parent with << (2 * homParent);
       // either bit 0 or bit 1 of the given parent is untransmitted, and
       // haplotype 0 is bit 0, and hap 1 is bit 1, so (1 << untransHap) gives
@@ -3878,6 +3896,7 @@ void Phaser::backtrace(NuclearFamily *theFam, int chrFirstMarker,
 	}
 	// TODO: PHASE_X_SPECIAL?
 	// TODO: for PHASE_AMBIG recalculate <bothParHomozyAtAmbig>?
+	//       ^^^ only if the IV changed
       }
     }
   }
@@ -4139,7 +4158,6 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
   // haplotype was _not_ transmitted
   uint8_t untrans;
 
-  // TODO: need the flanking informative markers for each parent do this right
   // We use the IV values at the flanking informative markers to determine
   // this. <ivFlippable> values are uncertain and so those values will not
   // figure into which haplotypes the parents transmitted.
@@ -4207,14 +4225,15 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
       // align the missing bit with the relevant <curState->iv> and
       // <uncertainIV> values
       uint64_t shiftedMiss = thisMarkMiss << p;
-      // (curState->iv & _parBits[p]) == 0, the first haplotype was
-      // transmitted. To detect when it was _un_transmitted, we use
-      // ~curState->iv and check when that value is 0
+      // if (curState->iv & _parBits[p]) == 0 for any child, the first
+      // haplotype was transmitted. To detect when it was _un_transmitted, we
+      // use ~curState->iv and check when that value is 0 (which implies that
+      // all children received haplotype 1)
       if ((~curState->iv & _parBits[p] & ~(uncertainIV | shiftedMiss)) == 0)
 	// first haplotype for this parent untransmitted:
 	untrans |= 1 << (2 * p); // use 1 for first haplotype
-      // (curState->iv & _parBits[p]) == 0 implies the second haplotype was
-      // untransmitted, so:
+      // similarly, we can use curState->iv to check whether haplotype 1 was
+      // _un_transmitted:
       if ((curState->iv & _parBits[p] & ~(uncertainIV | shiftedMiss)) == 0)
 	untrans |= 2 << (2 * p); // use 2 for second haplotype
     }
@@ -4227,23 +4246,33 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
     // values don't change the result below.
     uint64_t ivToInclude = ~(uncertainIV | thisMarkMiss | (uncertainIV >> 1));
 
-    // At PHASE_AMBIG sites, for many IV values, we can infer that the parents
-    // are in fact homozygous (for opposite alleles). The IV values where this
-    // is not the case are those where both parents transmitted the same
-    // pattern (or the exact opposite pattern).
+    // When both parents are missing data at autosomal sites:
+    // If the site is PHASE_AMBIG, for many IV values, we can infer that the
+    // parents are in fact homozygous (for opposite alleles). The IV values
+    // where this is not the case are those where both parents transmitted the
+    // same pattern (or the exact opposite pattern).
     // This is related to isIVambigPar().
     // Are we uncertain about homozygous status?
-    bool curUncertainHomozyAtAmbig = (curIVparDiff & ivToInclude) == 0 ||
+    bool bothParHomozyAtAmbig = false;
+    PhaseVals phaseVals = theFam->_phase[m];
+    if (phaseVals.status == PHASE_AMBIG &&
+	// Missing genotype value is 01; 5 = 0101, so both parents missing if:
+	phaseVals.parentData == 5 &&
+	!_onChrX) {
+      // For <curState>, did the parents transmit the exact same IV? Or the
+      // exact opposite IV?
+      bool curUncertainHomozyAtAmbig = (curIVparDiff & ivToInclude) == 0 ||
 			    ( (curIVparDiff ^ _parBits[0]) & ivToInclude ) == 0;
-    bool lastUncertainHomozyAtAmbig = (lastIVparDiff & ivToInclude) == 0 ||
+      // ... same as above but for <lastAssignedIV>
+      bool lastUncertainHomozyAtAmbig = (lastIVparDiff & ivToInclude) == 0 ||
 			    ( (lastIVparDiff ^ _parBits[0]) & ivToInclude ) ==0;
-    // Must both be homozygous if we are _not_ uncertain for cur and last:
-    bool bothParHomozyAtAmbig = 1 -
+      // Must both be homozygous if we are _not_ uncertain for cur or last:
+      bothParHomozyAtAmbig = 1 -
 		      (curUncertainHomozyAtAmbig | lastUncertainHomozyAtAmbig);
-    bothParHomozyAtAmbig &= !_onChrX; // above case is only for autosomal SNPs
+    }
 
     if (_onChrX) {
-      // on the X chromosome, for dad, there's only one haplotype, coded as 0
+      // on the X chromosome, for dad, there's only one haplotype, coded as 0,
       // that's transmitted to the daughters; haplotype 1 should be set to be
       // the same as haplotype 0 -- i.e., dad is either fully missing or has
       // "both" alleles present (really only one)
@@ -4294,11 +4323,20 @@ uint64_t Phaser::calcAndSetUntransPar(NuclearFamily *theFam, int startMarker,
 	  setUntransIfAmbig |= momSons << 2;
 
 	  // in order to get into the special case, the sons must all have the
-	  // same genotype (or be missing) and therefore the same IV from Mom;
+	  // same genotype (or be missing) and therefore, if Mom is het, they'd
+	  // have the same IV from her;
 	  // now we need only check the daughters. First we check whether
-	  // they're all missing and then we determine whether they (a) all have
-	  // the same IV value and (b) have a different IV value than the sons.
+	  // they're all missing, which yields the ambiguity. If they're not
+	  // all missing, we determine whether they (a) all have the same IV
+	  // value and (b) have a different IV value than the sons.
 	  // When that is the case, the marker is the special case ambiguous.
+	  // Reasons:
+	  // We know the allele the mother transmitted to the sons, but the
+	  // daughters all inherited the same haplotype from their Mom and
+	  // they're all heterozygous. No information tells us which allele the
+	  // mother transmitted to those daughters, so her genotype (het or
+	  // homozygous) is ambiguous, as is the father's. The only allele we
+	  // know is the one transmitted to the sons.
 	  if ( (certainChildBits1[1] & ~shiftedMiss) == 0 )
 	    // all daughters with definite IV values are missing, so we have
 	    // an ambiguity
