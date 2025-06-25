@@ -6,7 +6,7 @@ HAPI (HAPlotype Inference) 2 performs phasing (i.e., haplotype inference) on nuc
 Compiling HAPI2
 ---------------
 
-HAPI2 requires zlib, including developmental headers (e.g., the `zlib1g-dev` package on Ubuntu).
+HAPI2 requires [Google's sparsehash](https://github.com/sparsehash/sparsehash) library (e.g., the `libsparsehash-dev` package on Ubuntu), and zlib with developmental headers (e.g., the `zlib1g-dev` package on Ubuntu).
 
 Clone the repository by running
 
